@@ -82,6 +82,7 @@ const { validatePluginArchiveFile } = require('./plugin-archive');
 const { OperationsManager } = require('./operations-manager');
 const { UpdateManager } = require('./update-manager');
 const { CloudflareTunnelManager, DatabaseTunnelSettingsStore, SiteCloudflareTunnelRegistry } = require('./cloudflare-tunnel');
+const { CloudflareTunnelControlPlane } = require('./cloudflare-tunnel-control-plane');
 const { registerSiteRoutes } = require('./routes/sites');
 const { registerAdminRoutes } = require('./routes/admin');
 const { registerOperationsRoutes } = require('./routes/operations');
@@ -98,15 +99,16 @@ const performanceMonitor = new PerformanceMonitor({ db, manager, snapshotManager
 const edgeProxy = new EdgeProxy({ db, manager });
 const operationsManager = new OperationsManager({ db, manager, snapshotManager, edgeProxy });
 const updateManager = new UpdateManager({ db });
-const cloudflareTunnels = new SiteCloudflareTunnelRegistry({
-  db,
-  log: (siteId, level, message) => manager.log(siteId, level, message)
-});
-const cloudflareReconciler = new CloudflareReconciler({ db, manager, getSetting });
 const legacyCloudflareTunnel = new CloudflareTunnelManager({
   settingsStore: new DatabaseTunnelSettingsStore(db),
   log: (level, message) => manager.log(null, level, `[Legacy tunnel] ${message}`)
 });
+const cloudflareTunnels = new SiteCloudflareTunnelRegistry({
+  db,
+  sharedManager: legacyCloudflareTunnel,
+  log: (siteId, level, message) => manager.log(siteId, level, message)
+});
+const cloudflareReconciler = new CloudflareReconciler({ db, manager, getSetting });
 manager.setOperations(operationsManager);
 edgeProxy.setOperations(operationsManager);
 const publicDir = path.join(ROOT_DIR, 'public');
@@ -506,8 +508,17 @@ function integrationSettings() {
     cloudflareTargetIp: getSetting('cloudflare_target_ip', ''),
     certbotEmail: getSetting('certbot_email', ''),
     cloudflareReconcileEnabled: getSetting('cloudflare_reconcile_enabled', '0') === '1',
-    cloudflareReconcileMinutes: Number(getSetting('cloudflare_reconcile_minutes', '15')) || 15
+    cloudflareReconcileMinutes: Number(getSetting('cloudflare_reconcile_minutes', '15')) || 15,
+    cloudflareTunnelAccountId: getSetting('cloudflare_tunnel_account_id', ''),
+    cloudflareTunnelApiTokenConfigured: Boolean(getSecretSetting(db, 'cloudflare_tunnel_api_token', ''))
   };
+}
+
+function cloudflareTunnelControlPlane() {
+  const accountId = getSetting('cloudflare_tunnel_account_id', '');
+  const apiToken = getSecretSetting(db, 'cloudflare_tunnel_api_token', '');
+  if (!accountId || !apiToken) throw new Error('Configure a dedicated Cloudflare Tunnel account ID and management API token first.');
+  return new CloudflareTunnelControlPlane({ accountId, apiToken });
 }
 
 function securitySettings() {
@@ -595,7 +606,7 @@ const adminRouteContext = {
 const operationsRouteContext = {
   app, requireAuth, requireAdmin, webhookLimiter, serializeSiteMutation, db, crypto, DEPLOY_WEBHOOK_DUMMY_SECRET,
   operationsManager, manager, recordAudit, getSiteOr404, bool, validateSiteInput, uniqueSlug, writeSiteConfig,
-  getSecretSetting, setSecretSetting, getSetting, setSetting, cloudflareTunnels, legacyCloudflareTunnel, updateManager, verifyPassword, stepUpLimiter,
+  getSecretSetting, setSecretSetting, getSetting, setSetting, cloudflareTunnels, legacyCloudflareTunnel, cloudflareTunnelControlPlane, updateManager, verifyPassword, stepUpLimiter,
   multipart, updateUpload, cleanupUploadedFiles
 };
 

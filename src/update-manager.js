@@ -113,12 +113,13 @@ async function pruneApplicationReleases(activeState, keep = 4) {
   let entries = [];
   try { entries = await fs.promises.readdir(APP_RELEASES_DIR, { withFileTypes: true }); }
   catch { return; }
-  const protectedRoots = new Set([activeState?.root, activeState?.previousRoot].filter(Boolean).map((value) => path.resolve(value)));
+  const releaseRoots = new Set(entries.filter((entry) => entry.isDirectory()).map((entry) => path.resolve(path.join(APP_RELEASES_DIR, entry.name))));
+  const protectedRoots = new Set([activeState?.root, activeState?.previousRoot].filter(Boolean).map((value) => path.resolve(value)).filter((value) => releaseRoots.has(value)));
   const candidates = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const root = path.join(APP_RELEASES_DIR, entry.name);
-    if (protectedRoots.has(path.resolve(root))) continue;
+    const root = path.resolve(path.join(APP_RELEASES_DIR, entry.name));
+    if (protectedRoots.has(root)) continue;
     const stat = await fs.promises.stat(root).catch(() => null);
     if (stat) candidates.push({ root, mtimeMs: stat.mtimeMs });
   }

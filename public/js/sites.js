@@ -766,7 +766,8 @@ function openEditSite(site) {
   $('#site-cloudflare-tunnel-options').hidden = state.user?.role !== 'admin';
   if (state.user?.role === 'admin') {
     renderSiteCloudflareTunnel(site.cloudflareTunnel || {});
-    loadSiteCloudflareTunnel(site.id).catch((error) => { $('#site-cloudflare-tunnel-detail').textContent = error.message; });
+    if (!$('#site-cloudflare-tunnel-hostname').value) $('#site-cloudflare-tunnel-hostname').value = site.domain || '';
+    loadSiteCloudflareTunnel(site.id, site.domain || '').catch((error) => { $('#site-cloudflare-tunnel-detail').textContent = error.message; });
   }
   showModal($('#site-dialog'));
 }

@@ -2,6 +2,7 @@
 
 const { fs, path, crypto, http, https, net, spawn, execFile, Worker, zlib, promisify, express, httpProxy, SITES_DIR, NODE_START_TIMEOUT_MS, NPM_INSTALL_TIMEOUT_MS, NPM_INSTALL_WORKERS, NPM_INSTALL_QUEUE_LIMIT, HTTP_REQUEST_TIMEOUT_MS, STATS_FLUSH_INTERVAL_MS, VISITOR_RETENTION_DAYS, MINIFY_MAX_BYTES, MINIFY_CACHE_BYTES, MINIFY_WORKERS, MINIFY_QUEUE_LIMIT, COMPRESSION_WORKERS, COMPRESSION_QUEUE_LIMIT, VISITOR_PENDING_BUCKETS, FIREWALL_RATE_LIMIT_BUCKETS, TRUSTED_EDGE_PROXIES, DOCKER_BIN, DOCKER_INTERNAL_NETWORK, DOCKER_EGRESS_NETWORK, SITE_DATA_DIR, JWT_SECRET, safeRelativePath, certbotPaths, hasCertificate, runtimeEnvironment, buildEnvironment, operatorEnvironment, classifyClient, gzipAsync, brotliAsync, execFileAsync, COMPRESSIBLE_EXTENSIONS, INTERNAL_EDGE_TOKEN, REQUEST_IDENTITY, appendTail, cacheEntryBytes, responseChunkBytes, processOptions, terminateChild, ensureDockerInternalNetwork, terminateAndWait, realFileInside, realFileInsideAsync, hostForUrl, normalizeIp, requestHostname, TRUSTED_EDGE_RANGES, trustedEdgePeers, trustedEdgePeer, requestIdentity, buildIpBlockList, ipMatchesList, hydrateSite, listen, closeServer, freePort, waitForPort, siteIsolation, dockerContainerName, siteRoot } = require('./shared');
 const { maskIp } = require('../visitor-intelligence');
+const { EDGE_HTTP_PORT, EDGE_HTTPS_PORT } = require('../config');
 
 class CoreSiteManager {
   constructor(db) {
@@ -147,7 +148,7 @@ class CoreSiteManager {
       const job = this.minifyQueue.shift();
       let worker;
       try {
-        worker = new Worker(path.join(__dirname, 'minify-worker.js'), { workerData: job.task });
+        worker = new Worker(path.join(__dirname, '..', 'minify-worker.js'), { workerData: job.task });
       } catch (error) {
         job.reject(error);
         continue;
@@ -317,7 +318,6 @@ class CoreSiteManager {
     const runtime = this.statusFor(site.id, site);
     const protocol = runtime.protocol || (site.ssl_enabled ? 'https' : 'http');
     const host = hostForUrl(site.domain || (['0.0.0.0', '::'].includes(site.bind_host) ? 'localhost' : site.bind_host));
-    const { EDGE_HTTP_PORT, EDGE_HTTPS_PORT } = require('./config');
     const publicProtocol = site.edge_enabled && site.ssl_enabled && EDGE_HTTPS_PORT ? 'https' : site.edge_enabled && EDGE_HTTP_PORT ? 'http' : protocol;
     const publicPort = site.edge_enabled ? (publicProtocol === 'https' ? EDGE_HTTPS_PORT : EDGE_HTTP_PORT) : site.port;
     const defaultPort = (publicProtocol === 'https' && publicPort === 443) || (publicProtocol === 'http' && publicPort === 80);

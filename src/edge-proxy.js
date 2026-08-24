@@ -6,7 +6,7 @@ const path = require('node:path');
 const httpProxy = require('http-proxy');
 const { EDGE_HTTP_PORT, EDGE_HTTPS_PORT, EDGE_HOST, HTTP_REQUEST_TIMEOUT_MS } = require('./config');
 const { certbotPaths, hasCertificate } = require('./integrations');
-const { requestHostname, requestIdentity, INTERNAL_EDGE_TOKEN } = require('./site-manager');
+const { requestHostname, requestIdentity, INTERNAL_EDGE_TOKEN } = require('./sites/shared');
 
 function listen(server, port, host) {
   return new Promise((resolve, reject) => {
@@ -60,8 +60,9 @@ class EdgeProxy {
     this.siteCache = new Map();
     this.tlsContextCache = new Map();
     this.tlsDomainCache = new Map();
-    this.findEdgeSite = db.prepare("SELECT * FROM sites WHERE lower(domain) = lower(?) AND edge_enabled = 1 AND enabled = 1 LIMIT 1");
-    this.findTlsSite = db.prepare("SELECT domain FROM sites WHERE lower(domain) = lower(?) AND edge_enabled = 1 AND ssl_enabled = 1 AND enabled = 1 LIMIT 1");
+    this.ambiguousDomains = new Set();
+    this.findEdgeSites = db.prepare("SELECT * FROM sites WHERE lower(domain) = lower(?) AND edge_enabled = 1 AND enabled = 1 ORDER BY id LIMIT 2");
+    this.findTlsSites = db.prepare("SELECT domain FROM sites WHERE lower(domain) = lower(?) AND edge_enabled = 1 AND ssl_enabled = 1 AND enabled = 1 ORDER BY id LIMIT 2");
     this.findDefaultTlsDomain = db.prepare("SELECT domain FROM sites WHERE edge_enabled = 1 AND ssl_enabled = 1 AND enabled = 1 AND domain != '' ORDER BY id LIMIT 1");
     this.proxy = httpProxy.createProxyServer({ ws: true, xfwd: true, changeOrigin: false, secure: false, timeout: HTTP_REQUEST_TIMEOUT_MS, proxyTimeout: HTTP_REQUEST_TIMEOUT_MS });
     this.proxy.on('error', (_error, _req, target) => {
@@ -74,7 +75,7 @@ class EdgeProxy {
   }
 
   setOperations(operations) { this.operations = operations; }
-  invalidateSiteCache() { this.siteCache.clear(); this.tlsDomainCache.clear(); }
+  invalidateSiteCache() { this.siteCache.clear(); this.tlsDomainCache.clear(); this.ambiguousDomains.clear(); }
 
   enabled() { return EDGE_HTTP_PORT > 0 || EDGE_HTTPS_PORT > 0; }
   siteFor(req) {
@@ -86,7 +87,12 @@ class EdgeProxy {
     const now = Date.now();
     const cached = this.siteCache.get(key);
     if (cached && cached.expiresAt > now) return cached.site;
-    const site = this.findEdgeSite.get(host) || null;
+    const matches = this.findEdgeSites.all(host);
+    const site = matches.length === 1 ? matches[0] : null;
+    if (matches.length > 1 && !this.ambiguousDomains.has(key)) {
+      this.ambiguousDomains.add(key);
+      this.manager.log(null, 'error', `Refused ambiguous shared-edge hostname ${key}; more than one enabled site is configured for it.`);
+    }
     this.siteCache.delete(key);
     this.siteCache.set(key, { site, expiresAt: now + 1000 });
     if (this.siteCache.size > 1024) this.siteCache.delete(this.siteCache.keys().next().value);
@@ -152,11 +158,13 @@ class EdgeProxy {
           const now = Date.now();
           let cached = this.tlsDomainCache.get(key);
           if (!cached || cached.expiresAt <= now) {
-            cached = { domain: this.findTlsSite.get(servername)?.domain || '', expiresAt: now + 1000 };
+            const matches = this.findTlsSites.all(servername);
+            cached = { domain: matches.length === 1 ? matches[0].domain : '', ambiguous: matches.length > 1, expiresAt: now + 1000 };
             this.tlsDomainCache.delete(key);
             this.tlsDomainCache.set(key, cached);
             if (this.tlsDomainCache.size > 512) this.tlsDomainCache.delete(this.tlsDomainCache.keys().next().value);
           }
+          if (cached.ambiguous) return callback(new Error('Ambiguous shared-edge TLS hostname.'));
           const context = this.secureContext(cached.domain || row.domain);
           callback(null, context);
         } catch (error) { callback(error); }

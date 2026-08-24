@@ -47,6 +47,11 @@ async function loadAdmin() {
     $('#certbot-email').value = integrations.certbotEmail || '';
     $('#cloudflare-reconcile-enabled').checked = Boolean(integrations.cloudflareReconcileEnabled);
     $('#cloudflare-reconcile-minutes').value = integrations.cloudflareReconcileMinutes || 15;
+    $('#cloudflare-tunnel-account').value = integrations.cloudflareTunnelAccountId || '';
+    $('#cloudflare-tunnel-api-token').value = '';
+    $('#clear-cloudflare-tunnel-api-token').checked = false;
+    $('#cloudflare-tunnel-api-token').disabled = false;
+    $('#cloudflare-tunnel-api-token-status').textContent = integrations.cloudflareTunnelApiTokenConfigured ? 'A separate Tunnel management token is currently saved.' : 'No Tunnel management token is saved.';
     $('#cloudflare-token').value = '';
     $('#clear-cloudflare-token').checked = false;
     $('#cloudflare-token').disabled = false;
@@ -121,6 +126,11 @@ $('#clear-cloudflare-token').addEventListener('change', (event) => {
   if (event.target.checked) $('#cloudflare-token').value = '';
 });
 
+$('#clear-cloudflare-tunnel-api-token').addEventListener('change', (event) => {
+  $('#cloudflare-tunnel-api-token').disabled = event.target.checked;
+  if (event.target.checked) $('#cloudflare-tunnel-api-token').value = '';
+});
+
 $('#oidc-enabled').addEventListener('change', updateOidcUiState);
 $('#oidc-auto-provision').addEventListener('change', updateOidcUiState);
 
@@ -163,6 +173,9 @@ $('#integrations-form').addEventListener('submit', async (event) => {
       body: {
         cloudflareApiToken: $('#cloudflare-token').value,
         clearCloudflareToken: $('#clear-cloudflare-token').checked,
+        cloudflareTunnelAccountId: $('#cloudflare-tunnel-account').value,
+        cloudflareTunnelApiToken: $('#cloudflare-tunnel-api-token').value,
+        clearCloudflareTunnelApiToken: $('#clear-cloudflare-tunnel-api-token').checked,
         cloudflareZoneId: $('#cloudflare-zone').value,
         cloudflareTargetIp: $('#cloudflare-ip').value,
         certbotEmail: $('#certbot-email').value,
@@ -174,6 +187,10 @@ $('#integrations-form').addEventListener('submit', async (event) => {
     $('#clear-cloudflare-token').checked = false;
     $('#cloudflare-token').disabled = false;
     $('#cloudflare-token-status').textContent = result.integrations.cloudflareTokenConfigured ? 'A token is currently saved.' : 'No token is saved.';
+    $('#cloudflare-tunnel-api-token').value = '';
+    $('#clear-cloudflare-tunnel-api-token').checked = false;
+    $('#cloudflare-tunnel-api-token').disabled = false;
+    $('#cloudflare-tunnel-api-token-status').textContent = result.integrations.cloudflareTunnelApiTokenConfigured ? 'A separate Tunnel management token is currently saved.' : 'No Tunnel management token is saved.';
     toast('Integration settings saved.');
   } catch (error) { toast(error.message, 'error'); }
   finally { setBusy(button, false); }

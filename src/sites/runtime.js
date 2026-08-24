@@ -440,14 +440,26 @@ class SiteManager extends DeliverySiteManager {
     const message = `${backend.driver} runtime exited${Number.isInteger(code) ? ` with code ${code}` : ''}${signal ? ` after ${signal}` : ''}.`;
     this.errors.set(site.id, message);
     this.log(site.id, 'error', message);
+    backend.active = false;
+    runtime.stopping = true;
     runtime.proxy?.close();
     for (const socket of runtime.webSockets || []) socket.destroy();
-    closeServer(runtime.server).catch(() => {});
+    const gatewayClosed = closeServer(runtime.server).catch((error) => {
+      this.log(site.id, 'error', `Could not close the exited runtime gateway: ${error.message}`);
+    });
     this.running.delete(site.id);
     try { this.db.prepare("UPDATE runtime_instances SET observed_state = 'exited', updated_at = CURRENT_TIMESTAMP WHERE site_id = ?").run(site.id); }
     catch (error) { this.log(site.id, 'error', `Could not persist exited runtime state: ${error.message}`); }
+    // Docker backends are not launched with --rm because SHAM needs to inspect them
+    // while they are running. Once they exit, remove the container/project before a
+    // restart can race it or leave stale managed resources behind indefinitely.
+    const backendCleaned = this.stopBackend(backend).catch((error) => {
+      this.log(site.id, 'error', `Could not clean the exited ${backend.driver} runtime: ${error.message}`);
+    });
+    const cleanup = Promise.all([gatewayClosed, backendCleaned]);
     if (site.restart_policy === 'always' || (site.restart_policy === 'on-failure' && code !== 0)) {
-      this.scheduleRestart(site, message).catch((error) => this.log(site.id, 'error', `Automatic restart failed: ${error.message}`));
+      cleanup.then(() => this.scheduleRestart(site, message))
+        .catch((error) => this.log(site.id, 'error', `Automatic restart failed: ${error.message}`));
     }
   }
 

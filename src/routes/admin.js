@@ -177,23 +177,31 @@ app.get('/api/plugins', requireAuth, (req, res) => res.json({
   app.put('/api/admin/settings/integrations', requireAuth, requireAdmin, (req, res) => {
     try {
       const zoneId = String(req.body.cloudflareZoneId || '').trim();
+      const tunnelAccountId = String(req.body.cloudflareTunnelAccountId || '').trim().toLowerCase();
       const targetIp = String(req.body.cloudflareTargetIp || '').trim();
       const email = String(req.body.certbotEmail || '').trim();
       const cloudflareReconcileEnabled = bool(req.body.cloudflareReconcileEnabled, false);
       const cloudflareReconcileMinutes = Number(req.body.cloudflareReconcileMinutes || 15);
       if (!Number.isInteger(cloudflareReconcileMinutes) || cloudflareReconcileMinutes < 1 || cloudflareReconcileMinutes > 1440) throw new Error('Cloudflare reconciliation interval must be between 1 and 1440 minutes.');
       if (zoneId && !/^[a-fA-F0-9]{32}$/.test(zoneId)) throw new Error('Cloudflare zone ID must be a 32-character hexadecimal ID.');
+      if (tunnelAccountId && !/^[a-f0-9]{32}$/.test(tunnelAccountId)) throw new Error('Cloudflare Tunnel account ID must be a 32-character hexadecimal ID.');
       if (targetIp && net.isIP(targetIp) !== 4) throw new Error('Cloudflare origin must be a valid IPv4 address for the A record.');
       if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Certbot email address is not valid.');
       let cloudflareToken = getSecretSetting(db, 'cloudflare_api_token', '');
       if (req.body.cloudflareApiToken) cloudflareToken = String(req.body.cloudflareApiToken).trim();
       if (bool(req.body.clearCloudflareToken, false)) cloudflareToken = '';
+      let tunnelApiToken = getSecretSetting(db, 'cloudflare_tunnel_api_token', '');
+      if (req.body.cloudflareTunnelApiToken) tunnelApiToken = String(req.body.cloudflareTunnelApiToken).trim();
+      if (bool(req.body.clearCloudflareTunnelApiToken, false)) tunnelApiToken = '';
+      if (tunnelApiToken && (tunnelApiToken.length > 16 * 1024 || /[\s\0]/.test(tunnelApiToken))) throw new Error('Cloudflare Tunnel management API token must be a single value no longer than 16 KiB.');
       const previousToken = getSecretSetting(db, 'cloudflare_api_token', '');
       writeCloudflareCredentials(cloudflareToken);
       try {
         db.transaction(() => {
           setSecretSetting(db, 'cloudflare_api_token', cloudflareToken);
+          setSecretSetting(db, 'cloudflare_tunnel_api_token', tunnelApiToken);
           setSetting('cloudflare_zone_id', zoneId);
+          setSetting('cloudflare_tunnel_account_id', tunnelAccountId);
           setSetting('cloudflare_target_ip', targetIp);
           setSetting('certbot_email', email);
           setSetting('cloudflare_reconcile_enabled', cloudflareReconcileEnabled ? '1' : '0');

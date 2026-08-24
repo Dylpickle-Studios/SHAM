@@ -14,6 +14,22 @@ function registerSiteRoutes(ctx) {
     edgeProxy, getSetting, siteRows, getSiteOr404
   } = ctx;
 
+  const findActiveEdgeDomain = db.prepare(`
+    SELECT id, name FROM sites
+    WHERE lower(domain) = lower(?) AND edge_enabled = 1 AND enabled = 1 AND id != ?
+    LIMIT 1
+  `);
+  const assertEdgeDomainAvailable = (config, siteId = 0) => {
+    if (!config.edge_enabled || !config.enabled || !config.domain) return;
+    const conflict = findActiveEdgeDomain.get(config.domain, Number(siteId) || 0);
+    if (conflict) throw new Error(`Domain ${config.domain} is already routed by enabled edge site “${conflict.name}”. Disable its edge route or choose a different domain.`);
+  };
+  const assertTunnelOnlyBinding = (config, siteId) => {
+    if (!['0.0.0.0', '::'].includes(String(config.bind_host || ''))) return;
+    const tunnelOnly = db.prepare('SELECT 1 FROM site_cloudflare_tunnels WHERE site_id = ? AND tunnel_only = 1').get(siteId);
+    if (tunnelOnly) throw new Error('This site uses tunnel-only origin hardening and must remain bound to localhost or a loopback address. Disable tunnel-only mode before exposing it publicly.');
+  };
+
 app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().map((site) => ({ ...site, cloudflareTunnel: cloudflareTunnels.summary(site.id) })) }));
 
 
@@ -233,6 +249,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
       if ((config.runtime_type === 'compose' || config.runtime_type === 'container' || config.runtime_isolation === 'docker' || config.anubis_enabled) && req.user.role !== 'admin') throw new Error('Docker-backed runtimes require an administrator account.');
       if (source === 'git' && !config.git_url) throw new Error('Choose a Git repository before deploying from Git.');
       checkPort(config.port);
+      assertEdgeDomainAvailable(config);
       if (config.ssl_enabled && (!config.domain || !hasCertificate(config.domain))) {
         throw new Error('Issue a certificate before enabling SSL.');
       }
@@ -444,6 +461,8 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
         throw new Error('Docker-backed runtime settings require an administrator account.');
       }
       checkPort(config.port, site.id);
+      assertEdgeDomainAvailable(config, site.id);
+      assertTunnelOnlyBinding(config, site.id);
       config.slug = uniqueSlug(config.slug, site.id);
       const domainChanged = config.domain !== site.domain;
       if (domainChanged) config.cloudflare_enabled = false;

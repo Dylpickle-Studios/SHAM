@@ -111,7 +111,7 @@ function renderOperationsSite(payload) {
     ? payload.databaseProfiles.map((profile) => `<label class="check-card"><input type="checkbox" value="${profile.id}" ${profile.attached ? 'checked' : ''}><span><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(profile.type)} → ${escapeHtml(profile.envKey)}</small></span></label>`).join('')
     : '<p class="muted">No instance database profiles are configured.</p>';
 
-  $('#job-list').innerHTML = (payload.jobs || []).length ? payload.jobs.map((job) => `<div class="event-item"><div><strong>${escapeHtml(job.name)}</strong><span><code>${escapeHtml(job.schedule)}</code> · next ${escapeHtml(formatDate(job.next_run_at))} · ${job.last_status || 'never run'}</span><small>${escapeHtml(job.command)}</small></div><div class="inline-actions"><button class="button secondary" data-job-run="${job.id}" type="button" ${job.running ? 'disabled' : ''}>${job.running ? 'Running…' : 'Run now'}</button><button class="button ghost" data-job-edit="${job.id}" type="button">Edit</button><button class="button danger" data-job-delete="${job.id}" type="button">Delete</button></div></div>`).join('') : '<p class="muted">No scheduled tasks.</p>';
+  $('#job-list').innerHTML = (payload.jobs || []).length ? payload.jobs.map((job) => `<div class="event-item"><div><strong>${escapeHtml(job.name)}</strong><span><code>${escapeHtml(job.schedule)}</code> · next ${escapeHtml(formatDate(job.next_run_at))} · ${escapeHtml(job.last_status || 'never run')}</span><small>${escapeHtml(job.command)}</small></div><div class="inline-actions"><button class="button secondary" data-job-run="${job.id}" type="button" ${job.running ? 'disabled' : ''}>${job.running ? 'Running…' : 'Run now'}</button><button class="button ghost" data-job-edit="${job.id}" type="button">Edit</button><button class="button danger" data-job-delete="${job.id}" type="button">Delete</button></div></div>`).join('') : '<p class="muted">No scheduled tasks.</p>';
   $('#job-list').dataset.jobs = JSON.stringify(payload.jobs || []);
 }
 
@@ -124,6 +124,7 @@ function tunnelStatePresentation(tunnel = {}) {
     starting: ['Connecting', 'warning'],
     connected: ['Connected', 'success'],
     backoff: ['Restarting', 'warning'],
+    'needs-attention': ['Token needs attention', 'error'],
     error: ['Error', 'error']
   }[tunnel.state] || ['Unknown', 'warning'];
 }
@@ -136,8 +137,25 @@ function tunnelDetail(tunnel = {}) {
   else if (tunnel.running) details.push('The connector process is running and waiting for an edge connection.');
   else details.push('The connector is not running.');
   if (tunnel.restartCount) details.push(`${tunnel.restartCount} supervised restart${tunnel.restartCount === 1 ? '' : 's'} recorded.`);
+  if (tunnel.nextRetryAt) details.push(`Next retry ${formatDate(tunnel.nextRetryAt)}.`);
+  if (tunnel.origin?.state === 'healthy') details.push(`Loopback origin healthy${tunnel.origin.statusCode ? ` (${tunnel.origin.statusCode})` : ''}.`);
+  else if (tunnel.origin?.state === 'unhealthy') details.push(`Loopback origin unhealthy${tunnel.origin.lastError ? `: ${tunnel.origin.lastError}` : ''}.`);
+  else if (tunnel.origin?.state === 'not-configured') details.push('No loopback origin health check is configured.');
+  if (tunnel.exposureWarning) details.push(tunnel.exposureWarning);
   if (tunnel.lastError) details.push(tunnel.lastError);
   return details.join(' ');
+}
+
+function updateSiteTunnelMode() {
+  const shared = $('#site-cloudflare-connector-mode').value === 'shared';
+  const clearing = $('#site-clear-cloudflare-tunnel-token').checked;
+  $('#site-cloudflare-tunnel-token').disabled = shared || clearing;
+  $('#site-clear-cloudflare-tunnel-token').disabled = shared;
+  $('#provision-site-cloudflare-tunnel').disabled = shared;
+  if (shared) {
+    $('#site-cloudflare-tunnel-token').value = '';
+    $('#site-clear-cloudflare-tunnel-token').checked = false;
+  }
 }
 
 function renderSiteCloudflareTunnel(tunnel = {}) {
@@ -146,23 +164,32 @@ function renderSiteCloudflareTunnel(tunnel = {}) {
   $('#site-cloudflare-tunnel-status').textContent = label;
   $('#site-cloudflare-tunnel-status').className = `badge ${badgeClass}`.trim();
   $('#site-cloudflare-tunnel-enabled').checked = Boolean(tunnel.enabled);
+  $('#site-cloudflare-connector-mode').value = tunnel.route?.connectorMode === 'shared' ? 'shared' : 'dedicated';
   $('#site-cloudflare-tunnel-token').value = '';
   $('#site-cloudflare-tunnel-token').disabled = false;
   $('#site-clear-cloudflare-tunnel-token').checked = false;
+  $('#site-cloudflare-tunnel-id').value = tunnel.route?.tunnelId || '';
+  $('#site-cloudflare-tunnel-hostname').value = tunnel.route?.publicHostname || '';
+  $('#site-cloudflare-tunnel-origin').value = tunnel.route?.originService || '';
+  $('#site-cloudflare-managed-route').checked = Boolean(tunnel.route?.managedRoute);
+  $('#site-cloudflare-tunnel-only').checked = Boolean(tunnel.route?.tunnelOnly);
   $('#site-cloudflare-tunnel-token-status').textContent = tunnel.tokenConfigured
     ? tunnel.tokenReadable === false ? 'A token is saved but cannot be decrypted. Replace or clear it.' : 'A tunnel token is saved for this site.'
     : 'No tunnel token is saved for this site.';
   $('#site-cloudflare-tunnel-token-status').dataset.configured = tunnel.tokenConfigured ? '1' : '0';
   $('#site-cloudflare-tunnel-token-status').dataset.readable = tunnel.tokenReadable === false ? '0' : '1';
   $('#site-cloudflare-tunnel-detail').textContent = tunnelDetail(tunnel);
-  $('#site-cloudflare-tunnel-detail').className = `notice span-2 ${['error', 'unavailable', 'backoff', 'needs-token'].includes(tunnel.state) ? 'warning' : ''}`.trim();
+  $('#site-cloudflare-tunnel-detail').className = `notice span-2 ${['error', 'unavailable', 'backoff', 'needs-token', 'needs-attention'].includes(tunnel.state) || tunnel.origin?.state === 'unhealthy' ? 'warning' : ''}`.trim();
   $('#restart-site-cloudflare-tunnel').disabled = !tunnel.enabled || !tunnel.tokenConfigured || !tunnel.available;
+  $('#reconcile-site-cloudflare-tunnel').disabled = !tunnel.route?.managedRoute;
+  updateSiteTunnelMode();
 }
 
-async function loadSiteCloudflareTunnel(siteId) {
+async function loadSiteCloudflareTunnel(siteId, fallbackHostname = '') {
   if (state.user?.role !== 'admin' || !siteId) return;
   const result = await api(`/api/admin/sites/${siteId}/cloudflare-tunnel`);
   renderSiteCloudflareTunnel(result.cloudflareTunnel || {});
+  if (!$('#site-cloudflare-tunnel-hostname').value) $('#site-cloudflare-tunnel-hostname').value = fallbackHostname;
 }
 
 function updateBackupProviderFields() {
@@ -218,6 +245,13 @@ function renderOperationsInstance(payload) {
       return `<div class="connector-row"><div class="connector-mark">⇄</div><div><strong>${escapeHtml(tunnel.name)}</strong><span>${escapeHtml(target)}</span></div><span class="badge ${badgeClass}">${escapeHtml(label)}</span></div>`;
     }).join('')
     : '<div class="empty-connector"><strong>No connectors configured</strong><span>Edit a site to configure its Cloudflare Tunnel.</span></div>';
+  $('#shared-cloudflare-tunnel-options').hidden = state.user?.role !== 'admin';
+  $('#shared-cloudflare-tunnel-enabled').checked = Boolean(legacy.enabled);
+  $('#shared-cloudflare-tunnel-id').value = legacy.route?.tunnelId || '';
+  $('#shared-cloudflare-tunnel-token').value = '';
+  $('#clear-shared-cloudflare-tunnel-token').checked = false;
+  $('#shared-cloudflare-tunnel-token').disabled = false;
+  $('#shared-cloudflare-tunnel-token-status').textContent = legacy.tokenConfigured ? 'A shared connector token is saved.' : 'No shared connector token is saved.';
   const gitProviders = new Map((payload.gitProviders || []).map((item) => [item.provider, item]));
   for (const row of $$('[data-git-provider-row]')) {
     const provider = row.dataset.gitProviderRow;
@@ -595,6 +629,8 @@ $('#site-clear-cloudflare-tunnel-token').addEventListener('change', (event) => {
   if (event.currentTarget.checked) $('#site-cloudflare-tunnel-token').value = '';
 });
 
+$('#site-cloudflare-connector-mode').addEventListener('change', updateSiteTunnelMode);
+
 $('#save-site-cloudflare-tunnel').addEventListener('click', async (event) => {
   const siteId = Number($('#site-id').value);
   if (!siteId) return;
@@ -605,12 +641,58 @@ $('#save-site-cloudflare-tunnel').addEventListener('click', async (event) => {
     const token = $('#site-cloudflare-tunnel-token').value.trim();
     const tokenConfigured = $('#site-cloudflare-tunnel-token-status').dataset.configured === '1';
     const tokenReadable = $('#site-cloudflare-tunnel-token-status').dataset.readable !== '0';
-    if (enabled && (clearToken || (!tokenConfigured && !token))) throw new Error('Set a tunnel token before enabling this connector.');
-    if (enabled && tokenConfigured && !tokenReadable && !token) throw new Error('Replace the unreadable tunnel token before enabling this connector.');
-    const result = await api(`/api/admin/sites/${siteId}/cloudflare-tunnel`, { method: 'PUT', body: { enabled, token: token || undefined, clearToken } });
+    const connectorMode = $('#site-cloudflare-connector-mode').value;
+    if (connectorMode !== 'shared' && enabled && (clearToken || (!tokenConfigured && !token))) throw new Error('Set a tunnel token before enabling this connector.');
+    if (connectorMode !== 'shared' && enabled && tokenConfigured && !tokenReadable && !token) throw new Error('Replace the unreadable tunnel token before enabling this connector.');
+    const result = await api(`/api/admin/sites/${siteId}/cloudflare-tunnel`, {
+      method: 'PUT',
+      body: {
+        enabled, token: token || undefined, clearToken, connectorMode,
+        tunnelId: $('#site-cloudflare-tunnel-id').value,
+        publicHostname: $('#site-cloudflare-tunnel-hostname').value,
+        originService: $('#site-cloudflare-tunnel-origin').value,
+        managedRoute: $('#site-cloudflare-managed-route').checked,
+        tunnelOnly: $('#site-cloudflare-tunnel-only').checked
+      }
+    });
     renderSiteCloudflareTunnel(result.cloudflareTunnel || {});
     toast('Site tunnel settings saved.');
     await loadSites();
+  } catch (error) { toast(error.message, 'error'); }
+  finally { setBusy(event.currentTarget, false); }
+});
+
+$('#clear-shared-cloudflare-tunnel-token').addEventListener('change', (event) => {
+  $('#shared-cloudflare-tunnel-token').disabled = event.currentTarget.checked;
+  if (event.currentTarget.checked) $('#shared-cloudflare-tunnel-token').value = '';
+});
+
+$('#save-shared-cloudflare-tunnel').addEventListener('click', async (event) => {
+  setBusy(event.currentTarget, true, 'Saving…');
+  try {
+    const enabled = $('#shared-cloudflare-tunnel-enabled').checked;
+    const clearToken = $('#clear-shared-cloudflare-tunnel-token').checked;
+    const token = $('#shared-cloudflare-tunnel-token').value.trim();
+    const configured = Boolean(state.operations?.instance?.cloudflareTunnel?.tokenConfigured);
+    if (enabled && (clearToken || (!configured && !token))) throw new Error('Set a shared tunnel token before enabling the connector.');
+    const result = await api('/api/admin/cloudflare-tunnel', {
+      method: 'PUT',
+      body: { enabled, token: token || undefined, clearToken, tunnelId: $('#shared-cloudflare-tunnel-id').value }
+    });
+    state.operations = { ...(state.operations || {}), instance: { ...(state.operations?.instance || {}), cloudflareTunnel: result.cloudflareTunnel } };
+    renderOperationsInstance(state.operations.instance);
+    toast('Shared tunnel connector saved.');
+  } catch (error) { toast(error.message, 'error'); }
+  finally { setBusy(event.currentTarget, false); }
+});
+
+$('#restart-shared-cloudflare-tunnel').addEventListener('click', async (event) => {
+  setBusy(event.currentTarget, true, 'Restarting…');
+  try {
+    const result = await api('/api/admin/cloudflare-tunnel/restart', { method: 'POST' });
+    state.operations = { ...(state.operations || {}), instance: { ...(state.operations?.instance || {}), cloudflareTunnel: result.cloudflareTunnel } };
+    renderOperationsInstance(state.operations.instance);
+    toast('Shared tunnel connector restarted.');
   } catch (error) { toast(error.message, 'error'); }
   finally { setBusy(event.currentTarget, false); }
 });
@@ -624,6 +706,34 @@ $('#restart-site-cloudflare-tunnel').addEventListener('click', async (event) => 
     renderSiteCloudflareTunnel(result.cloudflareTunnel || {});
     toast('Site tunnel connector restarted.');
     await loadSites();
+  } catch (error) { toast(error.message, 'error'); }
+  finally { setBusy(event.currentTarget, false); }
+});
+
+$('#provision-site-cloudflare-tunnel').addEventListener('click', async (event) => {
+  const siteId = Number($('#site-id').value);
+  if (!siteId) return;
+  setBusy(event.currentTarget, true, 'Provisioning…');
+  try {
+    const result = await api(`/api/admin/sites/${siteId}/cloudflare-tunnel/provision`, {
+      method: 'POST',
+      body: { originService: $('#site-cloudflare-tunnel-origin').value, tunnelOnly: $('#site-cloudflare-tunnel-only').checked }
+    });
+    renderSiteCloudflareTunnel(result.cloudflareTunnel || {});
+    toast('Managed Cloudflare Tunnel provisioned and route reconciled.');
+    await loadSites();
+  } catch (error) { toast(error.message, 'error'); }
+  finally { setBusy(event.currentTarget, false); }
+});
+
+$('#reconcile-site-cloudflare-tunnel').addEventListener('click', async (event) => {
+  const siteId = Number($('#site-id').value);
+  if (!siteId) return;
+  setBusy(event.currentTarget, true, 'Reconciling…');
+  try {
+    const result = await api(`/api/admin/sites/${siteId}/cloudflare-tunnel/reconcile`, { method: 'POST' });
+    renderSiteCloudflareTunnel(result.cloudflareTunnel || {});
+    toast('Cloudflare Tunnel route reconciled.');
   } catch (error) { toast(error.message, 'error'); }
   finally { setBusy(event.currentTarget, false); }
 });

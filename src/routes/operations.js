@@ -9,9 +9,20 @@ function registerOperationsRoutes(ctx) {
   const {
     app, requireAuth, requireAdmin, webhookLimiter, serializeSiteMutation, db, crypto, DEPLOY_WEBHOOK_DUMMY_SECRET,
     operationsManager, manager, recordAudit, getSiteOr404, bool, validateSiteInput, uniqueSlug, writeSiteConfig,
-    getSecretSetting, setSecretSetting, getSetting, setSetting, cloudflareTunnels, legacyCloudflareTunnel, updateManager, verifyPassword, stepUpLimiter,
+    getSecretSetting, setSecretSetting, getSetting, setSetting, cloudflareTunnels, legacyCloudflareTunnel, cloudflareTunnelControlPlane, updateManager, verifyPassword, stepUpLimiter,
     multipart, updateUpload, cleanupUploadedFiles
   } = ctx;
+
+  const tunnelExposureWarning = (site, tunnel) => {
+    if (!tunnel?.route?.tunnelOnly) return null;
+    if (['0.0.0.0', '::'].includes(String(site.bind_host || ''))) return 'Tunnel-only mode requires the site listener to bind to localhost or a loopback address.';
+    if (!site.edge_enabled) return 'Tunnel-only mode is protecting this site listener, but no shared edge route is enabled. Verify that the configured loopback origin service reaches this site.';
+    return 'Tunnel-only mode protects the site listener. Also keep host/Docker mappings for the shared edge listener private.';
+  };
+  const tunnelPayload = (site) => {
+    const cloudflareTunnel = cloudflareTunnels.status(site.id);
+    return { ...cloudflareTunnel, exposureWarning: tunnelExposureWarning(site, cloudflareTunnel) };
+  };
 
 function authenticateDeployWebhook(req, res, next) {
     const site = manager.getSite(Number(req.params.id));
@@ -330,6 +341,7 @@ function authenticateDeployWebhook(req, res, next) {
       const configuration = { clearToken: bool(body.clearToken, false) };
       if (has('enabled')) configuration.enabled = bool(body.enabled);
       if (has('token')) configuration.token = String(body.token || '');
+      if (has('tunnelId')) configuration.tunnelId = String(body.tunnelId || '');
       const result = await legacyCloudflareTunnel.configure(configuration);
       recordAudit(req.user.id, 'cloudflare-tunnel.configure', { enabled: result.enabled, tokenUpdated: Boolean(has('token') && String(body.token || '').trim()), tokenCleared: bool(body.clearToken, false) });
       res.json({ cloudflareTunnel: result });
@@ -347,7 +359,7 @@ function authenticateDeployWebhook(req, res, next) {
   app.get('/api/admin/sites/:id/cloudflare-tunnel', requireAuth, requireAdmin, (req, res) => {
     const site = getSiteOr404(req, res);
     if (!site) return;
-    res.json({ cloudflareTunnel: cloudflareTunnels.status(site.id) });
+    res.json({ cloudflareTunnel: tunnelPayload(site) });
   });
 
   app.put('/api/admin/sites/:id/cloudflare-tunnel', requireAuth, requireAdmin, async (req, res) => {
@@ -359,6 +371,13 @@ function authenticateDeployWebhook(req, res, next) {
       const configuration = { clearToken: bool(body.clearToken, false) };
       if (has('enabled')) configuration.enabled = bool(body.enabled);
       if (has('token')) configuration.token = String(body.token || '');
+      if (has('tunnelId')) configuration.tunnelId = String(body.tunnelId || '');
+      if (has('publicHostname')) configuration.publicHostname = String(body.publicHostname || '');
+      if (has('originService')) configuration.originService = String(body.originService || '');
+      if (has('managedRoute')) configuration.managedRoute = bool(body.managedRoute, false);
+      if (has('tunnelOnly')) configuration.tunnelOnly = bool(body.tunnelOnly, false);
+      if (has('connectorMode')) configuration.connectorMode = String(body.connectorMode || '');
+      if (configuration.tunnelOnly && ['0.0.0.0', '::'].includes(String(site.bind_host || ''))) throw new Error('Tunnel-only mode requires this site to bind to localhost or a loopback address.');
       const result = await cloudflareTunnels.configure(site.id, configuration);
       recordAudit(req.user.id, 'site.cloudflare-tunnel.configure', {
         siteId: site.id,
@@ -366,7 +385,7 @@ function authenticateDeployWebhook(req, res, next) {
         tokenUpdated: Boolean(has('token') && String(body.token || '').trim()),
         tokenCleared: bool(body.clearToken, false)
       });
-      res.json({ cloudflareTunnel: result });
+      res.json({ cloudflareTunnel: { ...result, exposureWarning: tunnelExposureWarning(site, result) } });
     } catch (error) { res.status(400).json({ error: error.message }); }
   });
 
@@ -376,7 +395,52 @@ function authenticateDeployWebhook(req, res, next) {
     try {
       const result = await cloudflareTunnels.restart(site.id);
       recordAudit(req.user.id, 'site.cloudflare-tunnel.restart', { siteId: site.id });
-      res.json({ cloudflareTunnel: result });
+      res.json({ cloudflareTunnel: { ...result, exposureWarning: tunnelExposureWarning(site, result) } });
+    } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+
+  app.get('/api/admin/cloudflare-tunnels/discover', requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      const tunnels = await cloudflareTunnelControlPlane().listTunnels();
+      res.json({ tunnels: (Array.isArray(tunnels) ? tunnels : []).map((tunnel) => ({
+        id: String(tunnel.id || ''), name: String(tunnel.name || ''), status: String(tunnel.status || ''), configSource: String(tunnel.config_src || ''),
+        activeAt: tunnel.conns_active_at || null, connectionCount: Array.isArray(tunnel.connections) ? tunnel.connections.length : 0
+      })) });
+    } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+
+  app.post('/api/admin/sites/:id/cloudflare-tunnel/provision', requireAuth, requireAdmin, async (req, res) => {
+    const site = getSiteOr404(req, res);
+    if (!site) return;
+    try {
+      if (!site.domain || !site.edge_enabled) throw new Error('Provisioning a managed tunnel route requires a site domain and the shared edge proxy.');
+      if (['0.0.0.0', '::'].includes(String(site.bind_host || '')) && bool(req.body?.tunnelOnly, true)) throw new Error('Tunnel-only mode requires this site to bind to localhost or a loopback address.');
+      const originService = String(req.body?.originService || '').trim();
+      const controlPlane = cloudflareTunnelControlPlane();
+      const provisioned = await controlPlane.createAndConfigure({ name: `sham-${site.slug}-${site.id}`, publicHostname: site.domain, originService });
+      const result = await cloudflareTunnels.configure(site.id, {
+        enabled: true,
+        token: provisioned.token,
+        tunnelId: provisioned.tunnel.id,
+        publicHostname: provisioned.route.publicHostname,
+        originService: provisioned.route.originService,
+        managedRoute: true,
+        tunnelOnly: bool(req.body?.tunnelOnly, true)
+      });
+      recordAudit(req.user.id, 'site.cloudflare-tunnel.provision', { siteId: site.id, tunnelId: provisioned.tunnel.id, publicHostname: provisioned.route.publicHostname });
+      res.status(201).json({ cloudflareTunnel: { ...result, exposureWarning: tunnelExposureWarning(site, result) }, route: provisioned.route });
+    } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+
+  app.post('/api/admin/sites/:id/cloudflare-tunnel/reconcile', requireAuth, requireAdmin, async (req, res) => {
+    const site = getSiteOr404(req, res);
+    if (!site) return;
+    try {
+      const tunnel = cloudflareTunnels.status(site.id);
+      if (!tunnel.route?.managedRoute) throw new Error('Enable managed routing and save a tunnel ID, public hostname, and origin service first.');
+      const route = await cloudflareTunnelControlPlane().reconcileIngress(tunnel.route);
+      recordAudit(req.user.id, 'site.cloudflare-tunnel.reconcile', { siteId: site.id, tunnelId: route.tunnelId, publicHostname: route.publicHostname });
+      res.json({ cloudflareTunnel: tunnelPayload(site), route });
     } catch (error) { res.status(400).json({ error: error.message }); }
   });
 

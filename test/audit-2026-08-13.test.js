@@ -79,7 +79,7 @@ test('edge routing keeps integrations across HTTP pauses and bounds hot-path cac
   assert.match(edge, /this\.tlsContextCache = new Map\(\)/);
   assert.match(edge, /if \(this\.siteCache\.size > 1024\)/);
   assert.match(edge, /if \(this\.tlsContextCache\.size > 256\)/);
-  assert.match(edge, /invalidateSiteCache\(\) \{ this\.siteCache\.clear\(\); this\.tlsDomainCache\.clear\(\); \}/);
+  assert.match(edge, /invalidateSiteCache\(\) \{ this\.siteCache\.clear\(\); this\.tlsDomainCache\.clear\(\); this\.ambiguousDomains\.clear\(\); \}/);
   assert.match(edge, /for \(const socket of server\._shamSockets \|\| \[\]\) socket\.destroy\(\)/);
 });
 
@@ -193,8 +193,8 @@ test('alert delivery retries failed destinations without redelivering successful
 
 test('edge proxy prepares hot-path statements once and bounds TLS hostname caching', () => {
   const edge = read('src/edge-proxy.js');
-  assert.match(edge, /this\.findEdgeSite = db\.prepare/);
-  assert.match(edge, /this\.findTlsSite = db\.prepare/);
+  assert.match(edge, /this\.findEdgeSites = db\.prepare/);
+  assert.match(edge, /this\.findTlsSites = db\.prepare/);
   assert.match(edge, /this\.findDefaultTlsDomain = db\.prepare/);
   assert.match(edge, /this\.tlsDomainCache = new Map\(\)/);
   assert.match(edge, /if \(this\.tlsDomainCache\.size > 512\)/);

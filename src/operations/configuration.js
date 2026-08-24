@@ -1,5 +1,6 @@
 'use strict';
 
+const { isEncrypted } = require('../secret-store');
 const { fs, path, os, http, net, crypto, spawn, express, httpProxy, DATA_DIR, SITES_DIR, RELEASES_DIR, PREVIEWS_DIR, BACKUPS_DIR, SITE_DATA_DIR, DOCKER_BIN, GIT_BIN, TAR_BIN, RESTIC_BIN, AWS_BIN, SFTP_BIN, ANUBIS_IMAGE, JOB_POLL_INTERVAL_MS, JOB_TIMEOUT_MS, BACKUP_TIMEOUT_MS, GIT_TIMEOUT_MS, PREVIEW_TTL_HOURS, HTTP_REQUEST_TIMEOUT_MS, encrypt, decrypt, getSecretSetting, setSecretSetting, safeRelativePath, runtimeEnvironment, buildEnvironment, operatorEnvironment, appendTail, commandAvailable, processOptions, terminate, terminateAndWait, runProcess, runConfiguredCommand, parseField, parseCron, cronMatches, nextCronDate, safeName, pathInside, sftpQuote, freePort, closeServer, siteRoot, requiredFile, ensureRequiredFile, validateGitUrl, validateBranch } = require('./shared');
 
 class ConfigurationOperations {
@@ -190,7 +191,7 @@ class ConfigurationOperations {
     if (!name || !/^[a-z0-9_-]+$/.test(type) || !/^[A-Z_][A-Z0-9_]{0,127}$/.test(envKey)) throw new Error('Database profile name, type, or environment key is invalid.');
     const existing = id ? this.db.prepare('SELECT connection_value FROM database_profiles WHERE id = ?').get(id) : null;
     let connection = String(input.connection || '');
-    if (!connection && existing) connection = existing.connection_value;
+    if (!connection && existing) connection = isEncrypted(existing.connection_value) ? existing.connection_value : encrypt(existing.connection_value);
     else {
       if (!connection || connection.length > 16 * 1024 || /[\r\n\0]/.test(connection)) throw new Error('Connection value is invalid.');
       connection = encrypt(connection);

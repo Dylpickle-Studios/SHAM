@@ -5,7 +5,7 @@ const { Worker } = require('node:worker_threads');
 const { SNAPSHOTS_DIR, UPLOAD_LIMIT_BYTES, SNAPSHOT_RETENTION, SNAPSHOT_WORKERS, SNAPSHOT_QUEUE_LIMIT } = require('./config');
 const { siteRoot } = require('./site-paths');
 const { MAX_FILES } = require('./upload-utils');
-const { realFileInsideAsync } = require('./site-manager');
+const { realFileInsideAsync } = require('./sites/shared');
 
 async function pathExistsAsync(target) {
   try { await fs.promises.access(target); return true; }

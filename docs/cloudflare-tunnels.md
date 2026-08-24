@@ -1,17 +1,20 @@
 # Cloudflare Tunnels
 
-SHAM can supervise one remotely managed `cloudflared` connector per site. The connector makes an outbound connection to Cloudflare, so a site can be published without exposing its origin listener directly to the Internet.
+SHAM can supervise a dedicated remotely managed `cloudflared` connector per site, or one instance shared connector for several site routes. The connector makes an outbound connection to Cloudflare, so a site can be published without exposing its origin listener directly to the Internet.
 
 This feature is separate from SHAM's Cloudflare DNS/WAF integration:
 
 - **Cloudflare Tunnel token** — authorizes `cloudflared` to run one remotely managed tunnel. Store this in the site's **Cloudflare Tunnel** settings.
 - **Cloudflare API token + zone ID** — used by SHAM for DNS record reconciliation, WAF synchronization, and Cloudflare-assisted Certbot DNS challenges. A Tunnel connector does not require these values.
+- **Cloudflare Tunnel management API token + account ID** — optional, separate credentials used only to discover, create, and reconcile remotely managed Tunnel routes. Do not reuse the DNS/Certbot token unless its permissions are deliberately scoped for both jobs.
 
 ## Prerequisites
 
 1. A Cloudflare account with the hostname/domain you want to publish.
 2. A remotely managed Cloudflare Tunnel created in Cloudflare Zero Trust.
 3. `cloudflared` available to SHAM.
+
+For managed route provisioning, also configure a separate Cloudflare account ID and API token under **Administration → Cloudflare and Certbot**. The token needs Tunnel/Connector read and write permissions; SHAM keeps it encrypted and never returns it to the browser.
 
 The published SHAM Docker image includes `cloudflared`. For a direct source install, install `cloudflared` on the host or point `SHAM_CLOUDFLARED_BIN` at the executable.
 
@@ -25,15 +28,15 @@ Create or edit the site first. For domain-routed traffic, set the site's **Domai
 
 The Docker Compose defaults run the shared HTTP edge listener on port 80 inside the SHAM container. If you run SHAM directly from source, `SHAM_EDGE_HTTP_PORT` defaults to `0`, so either configure an edge listener or route the tunnel to the site's own listener.
 
-### 2. Create a remotely managed tunnel in Cloudflare
+### 2. Create or select a remotely managed tunnel
 
-In Cloudflare Zero Trust, create a Cloudflared Tunnel and copy its tunnel token. You only need the token value in SHAM; do not paste a shell command into the token field.
+Create a Cloudflared Tunnel in Cloudflare Zero Trust and paste its token into SHAM, or use **Provision managed tunnel** after configuring the separate Tunnel management API token. Provisioning creates a remotely managed Tunnel, stores its connector token encrypted, and reconciles the hostname route to the selected loopback origin service.
 
 Treat the tunnel token as a credential. Anyone with it can run a connector for that tunnel.
 
-### 3. Create the public hostname route in Cloudflare
+### 3. Create or reconcile the public hostname route
 
-Cloudflare continues to own the public-hostname-to-origin mapping. SHAM starts the connector but does not create Tunnel public-hostname routes through the Cloudflare API.
+Without managed routing, Cloudflare continues to own the public-hostname-to-origin mapping. With managed routing enabled, SHAM uses Cloudflare's remote Tunnel configuration API to reconcile only this site's hostname entry while preserving unrelated routes and the fallback rule.
 
 For the standard Docker Compose setup with a domain-routed site, a typical service target is:
 
@@ -64,11 +67,11 @@ Then:
 3. Select **Save tunnel**.
 4. Check the connector status.
 
-The token is encrypted at rest and is not returned to the browser after it is saved.
+The token is encrypted at rest and is not returned to the browser after it is saved. SHAM accepts only credential-free HTTP(S) loopback origin services for managed routes, which prevents the connector configuration from becoming a general network pivot.
 
 ### 5. Verify the connector
 
-Open **Settings → Instance → Cloudflare Tunnel connectors**. A healthy connector should reach **Connected**.
+Open **Settings → Instance → Cloudflare Tunnel connectors**. A healthy connector should reach **Connected** and report a healthy **Loopback origin**. These are separate signals: a connector can reach Cloudflare while its local target is unavailable or misrouted.
 
 Then request the public hostname through Cloudflare and confirm that it reaches the intended SHAM site.
 
@@ -82,15 +85,22 @@ Then request the public hostname through Cloudflare and confirm that it reaches 
 | **Backoff** | The connector exited and SHAM is waiting before restarting it. |
 | **Unavailable** | The configured `cloudflared` executable cannot be run. |
 | **Error** | Startup, token decryption, or connector execution failed. |
+| **Token needs attention** | An authentication failure was detected; retries pause until the token is replaced or an administrator explicitly restarts it. |
 | **Stopped** | The connector is not currently running. |
 
-SHAM supervises enabled connectors, uses bounded restart backoff, and starts `cloudflared` with `--no-autoupdate`. Upgrade `cloudflared` by upgrading the SHAM image/package rather than allowing the child process to self-update.
+SHAM supervises enabled connectors, uses jittered bounded restart backoff, rechecks an unavailable executable, and starts `cloudflared` with `--no-autoupdate`. Upgrade `cloudflared` by upgrading the SHAM image/package rather than allowing the child process to self-update.
+
+## Dedicated versus shared connectors
+
+Use a **dedicated connector** when a site should own its Tunnel token and lifecycle. Use the **instance shared connector** when several sites are configured as routes on the same remote Tunnel: configure the shared token once under **Settings → Instance → Cloudflare Tunnel connectors**, then select **Instance shared connector** for each site. SHAM does not start another `cloudflared` process for those sites.
+
+The shared connector is best for many related hostnames. A site route remains individually visible and can still be reconciled through the optional control-plane API.
 
 ## Docker and origin exposure
 
 A Tunnel is outbound-only, but publishing a site through a Tunnel does not automatically close ports you separately publish from Docker or the host firewall.
 
-If Cloudflare Tunnel is the exclusive ingress path, remove unnecessary public Docker port mappings or bind them only to a private/loopback interface. The SHAM container can still use its internal edge listener even when host port 80/443 is not publicly published.
+If Cloudflare Tunnel is the exclusive ingress path, enable **tunnel-only origin hardening**, bind the site listener to loopback, and remove unnecessary public Docker port mappings. SHAM rejects tunnel-only mode for `0.0.0.0`/`::` site listeners and warns that the shared edge listener itself must also remain private at the host/firewall layer.
 
 Keep the dashboard itself separately protected. A site Tunnel token is for that site's connector; it is not a dashboard access-control mechanism.
 
@@ -143,8 +153,11 @@ Tunnel management is administrator-only. The current site endpoints are:
 GET  /api/admin/sites/:id/cloudflare-tunnel
 PUT  /api/admin/sites/:id/cloudflare-tunnel
 POST /api/admin/sites/:id/cloudflare-tunnel/restart
+POST /api/admin/sites/:id/cloudflare-tunnel/provision
+POST /api/admin/sites/:id/cloudflare-tunnel/reconcile
+GET  /api/admin/cloudflare-tunnels/discover
 ```
 
 The instance operations payload also exposes connector summaries so the dashboard can show all site connector states without returning token plaintext.
 
-Older installations may still show an instance-wide legacy connector. Prefer per-site connectors for new configurations because their ownership and status map directly to one hosted site.
+The instance-wide connector is now the supported shared-connector mode. Prefer dedicated connectors for isolation and shared mode when multiple site hostnames intentionally belong to one remote Tunnel.

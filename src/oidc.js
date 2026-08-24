@@ -39,7 +39,11 @@ function hashState(value) { return sha256(value).toString('hex'); }
 function normalizeIssuer(value) {
   const issuer = String(value || '').trim().replace(/\/$/, '');
   const url = new URL(issuer);
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(url.hostname))) {
+  const hostname = String(url.hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error('OIDC issuer must not contain credentials, query parameters, or a fragment.');
+  }
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(hostname))) {
     throw new Error('OIDC issuer must use HTTPS (HTTP is only allowed for loopback development).');
   }
   return url.href.replace(/\/$/, '');
@@ -48,7 +52,8 @@ function normalizeIssuer(value) {
 function validateEndpoint(value, label = 'OIDC endpoint') {
   const url = new URL(String(value || ''));
   if (url.username || url.password || url.hash) throw new Error(`${label} must not contain credentials or a fragment.`);
-  const loopback = ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+  const hostname = String(url.hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
+  const loopback = ['localhost', '127.0.0.1', '::1'].includes(hostname);
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) throw new Error(`${label} must use HTTPS (HTTP is only allowed for loopback development).`);
   return url.href;
 }

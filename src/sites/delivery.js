@@ -215,10 +215,11 @@ class DeliverySiteManager extends CoreSiteManager {
     return entry;
   }
 
-  async precompressedFile(absolute, encoding) {
+  async precompressedFile(root, absolute, encoding) {
     if (!encoding) return null;
     const candidate = `${absolute}.${encoding === 'br' ? 'br' : 'gz'}`;
     try {
+      if (!(await realFileInsideAsync(root, candidate))) return null;
       const [sourceStat, encodedStat] = await Promise.all([fs.promises.stat(absolute), fs.promises.stat(candidate)]);
       if (!encodedStat.isFile() || encodedStat.mtimeMs < sourceStat.mtimeMs) return null;
       return { path: candidate, stat: encodedStat, encoding };
@@ -227,7 +228,6 @@ class DeliverySiteManager extends CoreSiteManager {
 
   async sendEntry(site, absolute, entry, req, res) {
     res.type(path.extname(absolute));
-    res.setHeader('ETag', entry.etag);
     res.setHeader('Last-Modified', entry.lastModified);
     res.setHeader('Cache-Control', site.cache_seconds > 0 ? `public, max-age=${site.cache_seconds}` : 'no-cache');
     let encoded = { data: entry.data, encoding: null };
@@ -236,6 +236,11 @@ class DeliverySiteManager extends CoreSiteManager {
       res.setHeader('Vary', 'Accept-Encoding');
       if (encoded.encoding) res.setHeader('Content-Encoding', encoded.encoding);
     }
+    // A strong validator must identify the representation, not only the source
+    // bytes. Otherwise a client can reuse a gzip/br response after receiving a
+    // 304 for an identity request (or vice versa).
+    const etag = encoded.encoding ? `${entry.etag.slice(0, -1)}-${encoded.encoding}"` : entry.etag;
+    res.setHeader('ETag', etag);
     res.setHeader('Content-Length', String(encoded.data.length));
     if (req.fresh) { res.status(304).end(); return true; }
     if (req.method === 'HEAD') { res.end(); return true; }
@@ -245,7 +250,7 @@ class DeliverySiteManager extends CoreSiteManager {
 
   async sendPlainOptimized(site, absolute, req, res) {
     const encoding = site.compression ? this.acceptedEncoding(req) : null;
-    const sidecar = await this.precompressedFile(absolute, encoding);
+    const sidecar = await this.precompressedFile(siteRoot(site), absolute, encoding);
     if (sidecar) {
       const etag = `W/"${Math.floor(sidecar.stat.mtimeMs).toString(16)}-${sidecar.stat.size.toString(16)}-${sidecar.encoding}"`;
       res.type(path.extname(absolute));

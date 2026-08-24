@@ -162,7 +162,7 @@ test('shutdown terminates active npm and Certbot processes before closing storag
 test('static transformations use a bounded worker pool and entry files are revalidated per request', () => {
   const manager = source('src/site-manager.js');
   const config = source('src/config.js');
-  assert.match(manager, /new Worker\(path\.join\(__dirname, 'minify-worker\.js'\)/);
+  assert.match(manager, /new Worker\(path\.join\(__dirname, '\.\.', 'minify-worker\.js'\)/);
   assert.match(manager, /this\.minifyWorkers\.size \+ this\.minifyQueue\.length >= MINIFY_QUEUE_LIMIT/);
   assert.match(manager, /await realFileInsideAsync\(root, entry\)/);
   assert.match(config, /SHAM_MINIFY_WORKERS/);

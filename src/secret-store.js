@@ -108,9 +108,12 @@ function setSecretSetting(db, key, value) {
 }
 
 function migrateKnownSecrets(db) {
-  const settingKeys = ['cloudflare_api_token', 'cloudflare_tunnel_token', 'backup_config', 'alert_delivery_config', 'prometheus_token', 'otel_headers', 'oidc_client_secret'];
+  const settingKeys = ['cloudflare_api_token', 'cloudflare_tunnel_token', 'cloudflare_tunnel_api_token', 'backup_config', 'alert_delivery_config', 'prometheus_token', 'otel_headers', 'oidc_client_secret'];
   const updateSetting = db.prepare('UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?');
   const updatePlugin = db.prepare('UPDATE plugin_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE plugin_id = ? AND key = ?');
+  const updateDatabaseProfile = db.prepare('UPDATE database_profiles SET connection_value = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+  const updateEnvironment = db.prepare('UPDATE site_env SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE site_id = ? AND key = ?');
+  const updateAlertDestination = db.prepare('UPDATE alert_destinations SET config_encrypted = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
   const transaction = db.transaction(() => {
     for (const key of settingKeys) {
       const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
@@ -134,6 +137,15 @@ function migrateKnownSecrets(db) {
     }
     for (const user of db.prepare('SELECT id, totp_secret FROM users WHERE totp_secret IS NOT NULL AND totp_secret != ?').all('')) {
       if (!isEncrypted(user.totp_secret)) db.prepare('UPDATE users SET totp_secret = ? WHERE id = ?').run(encrypt(user.totp_secret), user.id);
+    }
+    for (const row of db.prepare("SELECT id, connection_value FROM database_profiles WHERE connection_value != ''").all()) {
+      if (!isEncrypted(row.connection_value)) updateDatabaseProfile.run(encrypt(row.connection_value), row.id);
+    }
+    for (const row of db.prepare("SELECT site_id, key, value FROM site_env WHERE secret = 1 AND value != ''").all()) {
+      if (!isEncrypted(row.value)) updateEnvironment.run(encrypt(row.value), row.site_id, row.key);
+    }
+    for (const row of db.prepare("SELECT id, config_encrypted FROM alert_destinations WHERE config_encrypted != ''").all()) {
+      if (!isEncrypted(row.config_encrypted)) updateAlertDestination.run(encrypt(row.config_encrypted), row.id);
     }
   });
   transaction();
@@ -162,6 +174,15 @@ function rotateMasterKey(db) {
     }
     for (const row of db.prepare('SELECT id, totp_secret FROM users WHERE totp_secret IS NOT NULL AND totp_secret != ?').all('')) {
       if (isEncrypted(row.totp_secret)) db.prepare('UPDATE users SET totp_secret = ? WHERE id = ?').run(encrypt(decrypt(row.totp_secret), next), row.id);
+    }
+    for (const row of db.prepare("SELECT id, connection_value FROM database_profiles WHERE connection_value != ''").all()) {
+      if (isEncrypted(row.connection_value)) db.prepare('UPDATE database_profiles SET connection_value = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(encrypt(decrypt(row.connection_value), next), row.id);
+    }
+    for (const row of db.prepare("SELECT site_id, key, value FROM site_env WHERE secret = 1 AND value != ''").all()) {
+      if (isEncrypted(row.value)) db.prepare('UPDATE site_env SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE site_id = ? AND key = ?').run(encrypt(decrypt(row.value), next), row.site_id, row.key);
+    }
+    for (const row of db.prepare("SELECT id, config_encrypted FROM alert_destinations WHERE config_encrypted != ''").all()) {
+      if (isEncrypted(row.config_encrypted)) db.prepare('UPDATE alert_destinations SET config_encrypted = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(encrypt(decrypt(row.config_encrypted), next), row.id);
     }
   });
 

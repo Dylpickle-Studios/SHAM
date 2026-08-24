@@ -379,6 +379,12 @@ db.exec(`
     site_id INTEGER PRIMARY KEY,
     enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
     token TEXT NOT NULL DEFAULT '',
+    tunnel_id TEXT NOT NULL DEFAULT '',
+    public_hostname TEXT NOT NULL DEFAULT '',
+    origin_service TEXT NOT NULL DEFAULT '',
+    managed_route INTEGER NOT NULL DEFAULT 0 CHECK (managed_route IN (0, 1)),
+    tunnel_only INTEGER NOT NULL DEFAULT 0 CHECK (tunnel_only IN (0, 1)),
+    connector_mode TEXT NOT NULL DEFAULT 'dedicated' CHECK (connector_mode IN ('dedicated', 'shared')),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
@@ -563,6 +569,9 @@ db.exec(`
   INSERT OR IGNORE INTO settings (key, value) VALUES ('cloudflare_target_ip', '');
   INSERT OR IGNORE INTO settings (key, value) VALUES ('cloudflare_tunnel_enabled', '0');
   INSERT OR IGNORE INTO settings (key, value) VALUES ('cloudflare_tunnel_token', '');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('cloudflare_tunnel_id', '');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('cloudflare_tunnel_api_token', '');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('cloudflare_tunnel_account_id', '');
   INSERT OR IGNORE INTO settings (key, value) VALUES ('certbot_email', '');
   INSERT OR IGNORE INTO settings (key, value) VALUES ('plugin_trusted_keys_json', '[]');
   INSERT OR IGNORE INTO settings (key, value) VALUES ('allow_unsigned_plugins', '0');
@@ -599,6 +608,13 @@ db.exec(`
   INSERT OR IGNORE INTO settings (key, value) VALUES ('cloudflare_reconcile_minutes', '15');
 
 `);
+
+ensureColumn('site_cloudflare_tunnels', 'tunnel_id', "TEXT NOT NULL DEFAULT ''");
+ensureColumn('site_cloudflare_tunnels', 'public_hostname', "TEXT NOT NULL DEFAULT ''");
+ensureColumn('site_cloudflare_tunnels', 'origin_service', "TEXT NOT NULL DEFAULT ''");
+ensureColumn('site_cloudflare_tunnels', 'managed_route', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('site_cloudflare_tunnels', 'tunnel_only', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('site_cloudflare_tunnels', "connector_mode", "TEXT NOT NULL DEFAULT 'dedicated'");
 
 const oidcPasswordMigration = db.prepare("SELECT value FROM settings WHERE key = 'oidc_password_config_migrated'").get();
 if (oidcPasswordMigration?.value !== '1') {

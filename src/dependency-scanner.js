@@ -3,7 +3,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { DEPENDENCY_SCAN_TIMEOUT_MS, DEPENDENCY_SCAN_WORKERS, DEPENDENCY_SCAN_QUEUE_LIMIT } = require('./config');
 const { siteRoot } = require('./site-paths');
-const { realFileInsideAsync } = require('./site-manager');
+const { realFileInsideAsync } = require('./sites/shared');
 const { buildEnvironment } = require('./process-env');
 
 function tail(value, chunk, limit = 2 * 1024 * 1024) {
