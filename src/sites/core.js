@@ -148,7 +148,7 @@ class CoreSiteManager {
       const job = this.minifyQueue.shift();
       let worker;
       try {
-        worker = new Worker(path.join(__dirname, 'minify-worker.js'), { workerData: job.task });
+        worker = new Worker(path.join(__dirname, '..', 'minify-worker.js'), { workerData: job.task });
       } catch (error) {
         job.reject(error);
         continue;

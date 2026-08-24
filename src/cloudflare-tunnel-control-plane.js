@@ -116,9 +116,12 @@ class CloudflareTunnelControlPlane {
   }
 
   async createAndConfigure({ name, publicHostname, originService }) {
+    const hostname = validatePublicHostname(publicHostname);
+    const service = validateOriginService(originService);
+    if (!service) throw new Error('A loopback origin service is required to reconcile a tunnel route.');
     const tunnel = await this.createTunnel(name);
     const token = await this.getToken(tunnel.id);
-    const route = await this.reconcileIngress({ tunnelId: tunnel.id, publicHostname, originService });
+    const route = await this.reconcileIngress({ tunnelId: tunnel.id, publicHostname: hostname, originService: service });
     return { tunnel, token: String(token || ''), route };
   }
 }

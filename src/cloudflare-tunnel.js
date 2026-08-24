@@ -133,9 +133,12 @@ function validateOriginService(value) {
 
 function probeOriginService(service, hostname, timeoutMs = 5000) {
   let target;
-  try { target = new URL(validateOriginService(service)); }
+  try {
+    const validated = validateOriginService(service);
+    if (!validated) return Promise.resolve({ healthy: null, error: '' });
+    target = new URL(validated);
+  }
   catch (error) { return Promise.resolve({ healthy: false, error: error.message }); }
-  if (!target.href) return Promise.resolve({ healthy: null, error: '' });
   const transport = target.protocol === 'https:' ? https : http;
   return new Promise((resolve) => {
     let settled = false;
