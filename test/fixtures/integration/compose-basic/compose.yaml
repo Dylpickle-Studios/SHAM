@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    environment:
+      DEPENDENCY_URL: http://dependency:8081
+    expose:
+      - "3000"
+  dependency:
+    image: busybox:1.37
+    command: ["sh", "-c", "while true; do printf 'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nOK' | nc -l -p 8081; done"]
+    expose:
+      - "8081"

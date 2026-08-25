@@ -346,6 +346,8 @@ npm run dev
 
 `npm run dev` uses Node's watch mode. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [RELEASING.md](RELEASING.md) before submitting or publishing changes.
 
+For the real deployment, Docker Compose, and Chromium browser suites, see [Integration and browser testing](docs/integration-testing.md). They are separate from `npm test` so ordinary local unit-test runs remain fast.
+
 ## Project structure
 
 ```text

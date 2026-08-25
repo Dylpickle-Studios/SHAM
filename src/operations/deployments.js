@@ -76,7 +76,18 @@ class DeploymentOperations extends ConfigurationOperations {
         await fs.promises.writeFile(keyPath, privateKey, { mode: 0o600 });
         environment.GIT_SSH_COMMAND = `ssh -i ${JSON.stringify(keyPath)} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`;
       }
-      await runProcess(GIT_BIN, ['clone', '--depth', '1', '--branch', ref, '--single-branch', '--', repository, stage], this.trackedProcessOptions({ timeoutMs: GIT_TIMEOUT_MS, env: environment, environmentMode: 'build', onLine: (level, line) => this.manager.log(site.id, level, `git: ${line}`, { deploymentId }) }));
+      const cloneOptions = this.trackedProcessOptions({ timeoutMs: GIT_TIMEOUT_MS, env: environment, environmentMode: 'build', onLine: (level, line) => this.manager.log(site.id, level, `git: ${line}`, { deploymentId }) });
+      try {
+        await runProcess(GIT_BIN, ['clone', '--depth', '1', '--branch', ref, '--single-branch', '--', repository, stage], cloneOptions);
+      } catch (error) {
+        // Dumb HTTP is still a supported Git transport but cannot advertise
+        // shallow-clone capabilities. Retry without --depth rather than
+        // rejecting an otherwise valid, credential-free repository.
+        if (!/dumb http transport does not support shallow capabilities/i.test(String(error.message || ''))) throw error;
+        this.manager.log(site.id, 'info', 'Git remote does not support shallow clones; retrying a full clone.', { deploymentId });
+        await fs.promises.rm(stage, { recursive: true, force: true });
+        await runProcess(GIT_BIN, ['clone', '--branch', ref, '--single-branch', '--', repository, stage], cloneOptions);
+      }
       const commitSha = (await runProcess(GIT_BIN, ['rev-parse', 'HEAD'], this.trackedProcessOptions({ cwd: stage, timeoutMs: 30_000, env: environment, environmentMode: 'build' }))).output.trim();
       const metadata = (await runProcess(GIT_BIN, ['log', '-1', '--format=%an%x00%s'], this.trackedProcessOptions({ cwd: stage, timeoutMs: 30_000, env: environment, environmentMode: 'build' }))).output.split('\0');
       const commitAuthor = String(metadata[0] || '').trim().slice(0, 200);

@@ -11,8 +11,11 @@
     "check:syntax": "node scripts/check-syntax.js",
     "lint": "eslint src bin runtime-agent scripts test public",
     "typecheck": "tsc --noEmit",
-    "check": "npm run check:syntax && npm run lint && npm run typecheck",
+    "check": "node scripts/check-syntax.js && npm run lint && npm run typecheck",
     "test": "node --test test/*.test.js",
+    "test:integration": "SHAM_RUN_INTEGRATION=1 node --test --test-concurrency=1 test/integration/*.integration.test.js",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
     "security": "npm audit --omit=dev --audit-level=high",
     "verify": "npm run check && npm test && npm run security",
     "release:check": "npm run check && npm test && node scripts/release-check.js"
@@ -48,6 +51,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
     "@types/better-sqlite3": "^9.6.0",
     "@types/express": "^5.0.6",
     "@types/http-proxy": "^1.17.17",
