@@ -150,8 +150,15 @@ async function fetchAndValidateComposeConfig({ files, cwd, env, service, contain
   const result = await runTool(DOCKER_BIN, ['compose', ...composeFileArgs(validatedFiles), 'config', '--format', 'json'], { cwd: root, env, timeoutMs: 30_000, maxOutputBytes: 2 * 1024 * 1024, rejectOutputOverflow: true });
   let config;
   try { config = JSON.parse(result.stdout); } catch { throw new Error('Docker Compose did not return a valid normalized configuration.'); }
-  validateComposeProjectPaths(config, root);
-  composeRuntimePolicy(config, service, { containerPort, requirePublishedPort: false });
+  try {
+    validateComposeProjectPaths(config, root);
+    composeRuntimePolicy(config, service, { containerPort, requirePublishedPort: false });
+  } catch (error) {
+    // Compose policy/path violations are invalid caller input, not an agent
+    // failure. Preserve that distinction through the RPC boundary so the
+    // control plane can reject an unsafe deployment before `compose up`.
+    throw new ValidationError(error instanceof Error ? error.message : String(error));
+  }
   return { config, root, validatedFiles };
 }
 

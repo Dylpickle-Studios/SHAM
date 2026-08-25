@@ -421,6 +421,10 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
             throw new Error(`The runtime started, but SHAM could not persist its enabled state: ${error.message}`);
           }
         } catch (error) {
+          // Compose safety policy is evaluated by the privileged agent against
+          // Docker's normalized project. Treat a policy violation as a rejected
+          // deployment, never as a successfully-created site with a warning.
+          if (config.runtime_type === 'compose' && error?.code === 'INVALID_REQUEST') throw error;
           warning = `Site was deployed but could not be started: ${error.message}`;
         }
       }
