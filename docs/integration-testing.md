@@ -1,11 +1,11 @@
 # Integration and browser testing
 
-SHAM's unit suite is intentionally fast. The integration suite starts real
-SHAM and Runtime Agent child processes with an empty temporary data directory,
-bootstraps an admin through the public API, serves a local Git fixture over
-HTTP, and drives normal Git-release, readiness, gateway, rollback, and startup
-reconciliation paths. It does not import the server or write deployment state
-directly.
+SHAM's unit suite is intentionally fast. The integration suite starts a real
+SHAM child process with an empty temporary data directory, bootstraps an admin
+through the public API, serves a local Git fixture over HTTP, and drives normal
+Git-release, readiness, gateway, rollback, and startup reconciliation paths.
+Docker scenarios also start a real Runtime Agent child process. The suite does
+not import the server or write deployment state directly.
 
 ## Commands
 
@@ -40,9 +40,10 @@ auxiliary published ports are rejected as invalid deployment input. SHAM cleans
 up the attempted site record and release staging rather than retaining a site
 with a startup warning.
 
-When a scenario fails, the harness appends sanitized SHAM output, site state,
-and runtime logs to the failure. The CI job also prints Docker containers,
-networks, and images. Do not put real credentials in test fixtures or logs.
+When a scenario fails, the harness appends bounded SHAM output, site state, and
+runtime logs to the failure. The CI job also prints Docker containers,
+networks, and images. Fixtures must not contain real credentials because the
+harness output is diagnostic data, not a secret-redaction boundary.
 
 Browser tests use Playwright Chromium and the same isolated harness:
 
@@ -54,8 +55,9 @@ npm run test:e2e
 They capture screenshots, traces, and video on failure. Browser binaries are
 not committed; GitHub Actions installs Chromium in its browser job. The suite
 currently covers first-run administrator setup and an authenticated dashboard
-view of a real deployed site. Use API setup for deployment prerequisites when
-the browser behavior itself is not under test.
+view of a real deployed site. It does not yet navigate the site-specific Logs
+panel; use API setup for deployment prerequisites when the browser behavior
+itself is not under test.
 
 ## CI layout
 

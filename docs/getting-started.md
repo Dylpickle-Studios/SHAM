@@ -4,7 +4,7 @@ This guide gets a new SHAM instance running and deploys a first site.
 
 > [!TIP]
 > **Use Docker Compose unless you specifically want to run SHAM directly from source.**
-> The repository ships a production Dockerfile and Compose configuration, and the stock SHAM image already includes several common infrastructure tools used by the control plane.
+> The repository ships a production Dockerfile and Compose configuration, and the stock SHAM image includes the common infrastructure tools used by SHAM and its optional Runtime Agent.
 
 ## What is running where?
 
@@ -25,13 +25,19 @@ There are two Docker modes:
 
 | Mode | Use it when | Docker socket? |
 |---|---|---|
-| **Base Compose** | You want to run SHAM and use features that do not require SHAM to control the Docker daemon. | No |
-| **Compose + isolation overlay** | SHAM needs to launch/manage Docker images, Dockerfile builds, Compose apps, Docker-isolated runtimes, or Anubis. | Yes |
+| **Base Compose** | You want to run SHAM and use features that do not require Docker-managed workloads. | Not mounted |
+| **Compose + isolation overlay** | You need Docker images, Dockerfile builds, Compose apps, Docker-isolated runtimes, or Anubis. | Runtime Agent only |
 
-The second mode is **not Docker-in-Docker**. SHAM still runs in its own container, but its Docker CLI talks to the **host Docker daemon** through `/var/run/docker.sock`.
+The second mode is **not Docker-in-Docker**. It adds a separate
+`sham-runtime-agent` container: the internet-facing `sham` control plane never
+gets the Docker socket. The Runtime Agent's Docker CLI talks to the **host
+Docker daemon** through `/var/run/docker.sock` over a narrow, authenticated
+Unix-socket RPC boundary.
 
 > [!IMPORTANT]
-> Mounting the Docker socket gives SHAM substantial control over the Docker host. Enable it only when you need Docker-managed workloads and only on infrastructure where that trust boundary is acceptable.
+> Mounting the Docker socket gives the Runtime Agent substantial control over
+> the Docker host. Enable the overlay only when you need Docker-managed
+> workloads and only on infrastructure where that trust boundary is acceptable.
 
 ## 1. Requirements
 
@@ -43,7 +49,11 @@ For the recommended installation:
 
 For the optional Docker-management mode, the host must also expose a usable Docker socket at `/var/run/docker.sock`.
 
-The stock image includes Node.js, Git, the Docker CLI, Certbot, Cloudflared, Restic, AWS CLI, and OpenSSH tooling. **Cloud Native Buildpacks (`pack`) and Nixpacks are not bundled**; if you want those build modes, extend the image or otherwise make the configured executable available inside the SHAM container.
+The stock image includes Node.js, Git, the Docker CLI (used by the Runtime
+Agent), Certbot, Cloudflared, Restic, AWS CLI, and OpenSSH tooling. **Cloud
+Native Buildpacks (`pack`) and Nixpacks are not bundled**; if you want those
+build modes, extend the Runtime Agent image or otherwise make the configured
+executable available to that process.
 
 If you run SHAM directly from source instead, you need Node.js 22 or newer, npm, and a platform supported by `better-sqlite3`. OpenSSL is additionally required if you enable SHAM's local self-signed HTTPS option.
 
@@ -128,11 +138,15 @@ The resulting layout is:
 
 ```text
 Docker host
-├── SHAM container
+├── sham control-plane container
+│   └── /data → ./sham-data
+│        │ authenticated local Unix socket
+│        ▼
+├── sham-runtime-agent container
 │   ├── /data → ./sham-data
 │   └── /var/run/docker.sock ─────────┐
 │                                     │
-│                 Docker CLI inside SHAM
+│              Docker CLI inside Runtime Agent
 │                                     │
 └── host Docker daemon ◀──────────────┘
     ├── managed app container A
@@ -140,7 +154,8 @@ Docker host
     └── managed Compose project
 ```
 
-`SHAM_DOCKER_HOST_DATA_PATH` must be an **absolute host path**. It lets SHAM translate a container-internal path such as:
+`SHAM_DOCKER_HOST_DATA_PATH` must be an **absolute host path**. It is set on
+the Runtime Agent and lets it translate a container-internal path such as:
 
 ```text
 /data/sites/12/releases/abc123
@@ -165,7 +180,7 @@ Before making the instance public:
 3. Supply a strong `SHAM_JWT_SECRET` through your secret-management/deployment mechanism if you do not want SHAM to persist a generated signing secret under the data path.
 4. Configure `SHAM_TRUST_PROXY` and trusted edge proxies narrowly.
 5. Publish only the ports you actually need.
-6. Mount the Docker socket only if Docker-managed application features are required.
+6. Mount the Docker socket into `sham-runtime-agent` only if Docker-managed application features are required.
 7. Treat anyone who can deploy trusted runtime/build/plugin code as having meaningful authority over the host.
 
 See [Operations and security](operations-and-security.md) and [Configuration reference](configuration-reference.md) before exposing a production instance.
@@ -311,6 +326,18 @@ npm start
 ```
 
 The default source configuration listens on `127.0.0.1:8080` and stores mutable state under `./data` unless you change the environment.
+
+For Docker-managed sites, run the Runtime Agent separately with the same data
+path; the control plane itself must not receive Docker-socket access:
+
+```bash
+SHAM_DATA_PATH=./data npm run runtime-agent
+# In another terminal:
+SHAM_DATA_PATH=./data npm start
+```
+
+The account that starts `runtime-agent` needs permission to access the host
+Docker daemon. Do not expose its Unix socket or token over the network.
 
 To open a direct host install from another device on your LAN while retaining a secure browser context, set these values in `.env`:
 

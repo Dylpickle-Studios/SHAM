@@ -119,6 +119,17 @@ For direct LAN access with a browser secure context (including passkeys), set `S
 
 This is no longer the recommended first-run path. Host installations must provide any optional executables used by enabled features, such as Docker, Git, Certbot, `pack`, `nixpacks`, Restic, AWS CLI, or SFTP. OpenSSL is also required when `SHAM_SELF_SIGNED_HTTPS=true`.
 
+For Docker-managed sites in a direct source installation, start the privileged
+Runtime Agent separately and give Docker-socket access only to that process.
+It must share `SHAM_DATA_PATH` with the control plane so they share the local
+agent socket and token:
+
+```bash
+SHAM_DATA_PATH=./data npm run runtime-agent
+# In another terminal, with the same SHAM_DATA_PATH:
+SHAM_DATA_PATH=./data npm start
+```
+
 ## Create a site
 
 The site wizard supports four primary source paths:
