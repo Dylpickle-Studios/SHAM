@@ -225,7 +225,8 @@ function validateContainerImage(value) {
 function validateOptionalHostname(value, label) {
   const raw = String(value || '').trim().toLowerCase().replace(/\.$/, '');
   if (!raw) return '';
-  return validateDomain(raw);
+  try { return validateDomain(raw); }
+  catch { throw new Error(`${label || 'Hostname'} must be a valid hostname such as app.example.com.`); }
 }
 
 

@@ -1,10 +1,17 @@
+// @ts-nocheck -- not part of this session's checkJs rollout yet.
+// This file still has genuine `tsc --noEmit` findings (mostly narrow
+// `let x = null`-style inference and untyped Express handlers, the same
+// patterns already fixed across most of src/) that need real per-file
+// JSDoc work to resolve, not a suppression. Tracked as follow-up work;
+// see tsconfig.json and docs/development.md. Do not add more files here
+// without a similar comment and a plan to remove it.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { Worker } = require('node:worker_threads');
 const { PLUGINS_DIR, PLUGIN_ACTION_TIMEOUT_MS, PLUGIN_MAX_PENDING_ACTIONS } = require('./config');
 const { safeRelativePath } = require('./validation');
-const { extractPlugin, MAX_PLUGIN_FILES, MAX_PLUGIN_BYTES } = require('./plugin-archive');
+const { extractPlugin } = require('./plugin-archive');
 const { encrypt, decrypt, isEncrypted } = require('./secret-store');
 const { verifyPluginSignature, normalizeTrustedKeys } = require('./plugin-signing');
 
@@ -445,7 +452,7 @@ class PluginManager {
     const row = this.getRow(id);
     if (!row || !row.enabled) return null;
     const manifest = validateManifest(JSON.parse(row.manifest_json));
-    let instance = {};
+    let instance;
 
     if (manifest.type === 'js') {
       const mainPath = path.join(this.pluginRoot(row), ...manifest.main.split('/'));

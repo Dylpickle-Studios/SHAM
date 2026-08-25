@@ -2,7 +2,7 @@
 
 const { DeploymentOperations } = require('./deployments');
 const { getRuntimeClient } = require('../runtime/client');
-const { fs, path, os, http, net, crypto, spawn, express, httpProxy, DATA_DIR, SITES_DIR, RELEASES_DIR, PREVIEWS_DIR, BACKUPS_DIR, SITE_DATA_DIR, GIT_BIN, TAR_BIN, RESTIC_BIN, AWS_BIN, SFTP_BIN, ANUBIS_IMAGE, JOB_POLL_INTERVAL_MS, JOB_TIMEOUT_MS, BACKUP_TIMEOUT_MS, GIT_TIMEOUT_MS, PREVIEW_TTL_HOURS, HTTP_REQUEST_TIMEOUT_MS, encrypt, decrypt, getSecretSetting, setSecretSetting, safeRelativePath, runtimeEnvironment, buildEnvironment, operatorEnvironment, appendTail, commandAvailable, processOptions, terminate, terminateAndWait, runProcess, runConfiguredCommand, parseField, parseCron, cronMatches, nextCronDate, safeName, pathInside, sftpQuote, freePort, closeServer, siteRoot, requiredFile, ensureRequiredFile, validateGitUrl, validateBranch } = require('./shared');
+const { fs, GIT_BIN, ANUBIS_IMAGE, encrypt, decrypt, getSecretSetting, commandAvailable, terminateAndWait, runProcess } = require('./shared');
 
 class OperationsManager extends DeploymentOperations {
   validateAlertDestinationConfig(kind, input) {
@@ -50,7 +50,7 @@ class OperationsManager extends DeploymentOperations {
     const kind = String(input.kind || '').toLowerCase();
     if (!name || !['webhook', 'slack', 'discord', 'email'].includes(kind)) throw new Error('Alert destination name or type is invalid.');
     const existing = id ? this.db.prepare('SELECT config_encrypted FROM alert_destinations WHERE id = ?').get(id) : null;
-    let config = input.config && typeof input.config === 'object' ? this.validateAlertDestinationConfig(kind, input.config) : null;
+    const config = input.config && typeof input.config === 'object' ? this.validateAlertDestinationConfig(kind, input.config) : null;
     let encrypted = existing?.config_encrypted || '';
     if (config && Object.keys(config).length) {
       const serialized = JSON.stringify(config);
@@ -88,6 +88,7 @@ class OperationsManager extends DeploymentOperations {
     }
     const url = String(config.url || '').trim();
     if (!/^https?:\/\//i.test(url)) throw new Error('Webhook destination URL is invalid.');
+    /** @type {Record<string, unknown>} */
     let body = { title, detail, severity: alert.severity, siteId: alert.site_id, fingerprint: alert.fingerprint };
     if (row.kind === 'slack') body = { text: `*${title}*\n${detail}` };
     if (row.kind === 'discord') body = { content: `**${title}**\n${detail}`.slice(0, 1900) };
@@ -129,12 +130,17 @@ class OperationsManager extends DeploymentOperations {
     }
   }
 
+  /** @returns {Promise<void>} */
   async exportTelemetry() {
+    // this.lastTelemetryAt is initialized in ConfigurationOperations's
+    // constructor (configuration.js); checkJs cannot trace assignment
+    // across that base-class file, so it looks unassigned from here.
+    // @ts-expect-error TS2565 -- see comment above.
     if (Date.now() - this.lastTelemetryAt < 60_000) return;
     this.lastTelemetryAt = Date.now();
     const endpoint = this.db.prepare("SELECT value FROM settings WHERE key = 'otel_endpoint'").get()?.value || '';
     if (!endpoint) return;
-    let headers = {};
+    let headers;
     try { headers = JSON.parse(getSecretSetting(this.db, 'otel_headers', '{}')); } catch { headers = {}; }
     const now = String(BigInt(Date.now()) * 1000000n);
     const metrics = [

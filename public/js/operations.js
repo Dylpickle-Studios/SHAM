@@ -429,7 +429,7 @@ $('#add-env-row').addEventListener('click', () => addEnvironmentRow());
 $('#paste-env').addEventListener('click', async () => {
   try {
     const text = await navigator.clipboard.readText();
-    const variables = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith('#')).map((line) => { const index = line.indexOf('='); if (index < 1) return null; const key = line.slice(0, index).trim().replace(/^export\s+/, ''); let value = line.slice(index + 1).trim(); if ((value.startsWith('\"') && value.endsWith('\"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1); return { key, value, scope: 'runtime', secret: /(?:SECRET|TOKEN|PASSWORD|KEY|PRIVATE|CREDENTIAL)/i.test(key) }; }).filter(Boolean);
+    const variables = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith('#')).map((line) => { const index = line.indexOf('='); if (index < 1) return null; const key = line.slice(0, index).trim().replace(/^export\s+/, ''); let value = line.slice(index + 1).trim(); if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1); return { key, value, scope: 'runtime', secret: /(?:SECRET|TOKEN|PASSWORD|KEY|PRIVATE|CREDENTIAL)/i.test(key) }; }).filter(Boolean);
     if (!variables.length) throw new Error('Clipboard does not contain KEY=VALUE lines.');
     $('#environment-rows').innerHTML = '';
     variables.forEach(addEnvironmentRow);

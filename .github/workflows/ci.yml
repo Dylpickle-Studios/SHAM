@@ -38,7 +38,7 @@ jobs:
             npm install --no-fund --no-audit
           fi
 
-      - name: Release-readiness checks
+      - name: Release-readiness checks (syntax, lint, typecheck, tests, release hygiene)
         run: npm run release:check
 
       - name: Audit production dependencies

@@ -1,10 +1,9 @@
 'use strict';
 
 const http = require('node:http');
-const fs = require('node:fs');
 const { PROTOCOL_VERSION, PROTOCOL_HEADER, MAX_REQUEST_BODY_BYTES, OPERATIONS, ERROR_CODES } = require('../src/runtime/protocol');
 const { DATA_DIR } = require('../src/config');
-const { loadOrCreateToken, tokensMatch, extractBearerToken } = require('./auth');
+const { tokensMatch, extractBearerToken } = require('./auth');
 const { ValidationError } = require('./validation');
 const docker = require('./docker');
 const { log } = require('./logger');

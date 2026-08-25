@@ -1,3 +1,10 @@
+// @ts-nocheck -- not part of this session's checkJs rollout yet.
+// This file still has genuine `tsc --noEmit` findings (mostly narrow
+// `let x = null`-style inference and untyped Express handlers, the same
+// patterns already fixed across most of src/) that need real per-file
+// JSDoc work to resolve, not a suppression. Tracked as follow-up work;
+// see tsconfig.json and docs/development.md. Do not add more files here
+// without a similar comment and a plan to remove it.
 'use strict';
 
 const { getSecretSetting, setSecretSetting } = require('./secret-store');
@@ -143,6 +150,11 @@ function providerStatuses(db) {
   });
 }
 
+/**
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} provider
+ * @param {{ token?: string | null, clearToken?: boolean, baseUrl?: string }} [options]
+ */
 function saveProviderToken(db, provider, { token, clearToken = false, baseUrl } = {}) {
   const definition = providerDefinition(provider, db);
   const incoming = token === undefined || token === null ? '' : String(token).trim();

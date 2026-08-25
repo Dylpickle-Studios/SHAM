@@ -5,6 +5,10 @@ const { DATA_DIR } = require('./config');
 
 const KEYRING_PATH = path.join(DATA_DIR, '.master-keyring.json');
 const ENCRYPTED_PREFIX = 'enc:v1:';
+
+/** @typedef {{ active: Buffer, previous: Buffer[], external: boolean }} Keyring */
+
+/** @type {Keyring | null} */
 let keyring = null;
 
 function decodeConfiguredKey(value) {
@@ -31,6 +35,7 @@ function writeKeyring(value) {
   try { fs.chmodSync(KEYRING_PATH, 0o600); } catch { /* Read-only or non-POSIX storage. */ }
 }
 
+/** @returns {Keyring} */
 function loadKeyring() {
   if (keyring) return keyring;
   const configured = decodeConfiguredKey(process.env.SHAM_MASTER_KEY);
@@ -94,11 +99,24 @@ function decryptedJson(value, fallback = null) {
   try { return JSON.parse(decrypt(value)); } catch { return fallback; }
 }
 
+/**
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} key
+ * @param {string} [fallback]
+ * @returns {string}
+ */
 function getSecretSetting(db, key, fallback = '') {
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+  const row = /** @type {SettingRow | undefined} */ (db.prepare('SELECT value FROM settings WHERE key = ?').get(key));
   return row ? decrypt(row.value, fallback) : fallback;
 }
 
+/** @typedef {{ value: string }} SettingRow */
+
+/**
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} key
+ * @param {unknown} value
+ */
 function setSecretSetting(db, key, value) {
   const encrypted = value ? encrypt(String(value)) : '';
   db.prepare(`
@@ -186,14 +204,12 @@ function rotateMasterKey(db) {
     }
   });
 
-  try {
-    transaction();
-    writeKeyring({ active: serializeKey(next), previous: [] });
-    keyring = { active: next, previous: [], external: false };
-  } catch (error) {
-    // The keyring still contains the previous key, so either version remains decryptable after a crash.
-    throw error;
-  }
+  // If any of this throws, the keyring file on disk still has the previous
+  // key (only written below on success), so either key version remains
+  // decryptable after a crash — nothing further to do here but propagate.
+  transaction();
+  writeKeyring({ active: serializeKey(next), previous: [] });
+  keyring = { active: next, previous: [], external: false };
   return { rotatedAt: new Date().toISOString() };
 }
 

@@ -128,11 +128,11 @@ test('control-plane reconciliation preserves unrelated ingress routes and uses b
   const requests = [];
   const fetchImpl = async (url, options) => {
     requests.push({ url, options });
-    if (options.method === 'GET') return { ok: true, status: 200, json: async () => ({ success: true, result: { config: { ingress: [
+    if (options.method === 'GET') {return { ok: true, status: 200, json: async () => ({ success: true, result: { config: { ingress: [
       { hostname: 'old.example.test', service: 'http://127.0.0.1:3000' },
       { hostname: 'keep.example.test', service: 'http://127.0.0.1:4000' },
       { service: 'http_status:404' }
-    ] } } }) };
+    ] } } }) };}
     return { ok: true, status: 200, json: async () => ({ success: true, result: { version: 7 } }) };
   };
   const control = new CloudflareTunnelControlPlane({

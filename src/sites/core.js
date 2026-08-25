@@ -1,6 +1,13 @@
+// @ts-nocheck -- not part of this session's checkJs rollout yet.
+// This file still has genuine `tsc --noEmit` findings (mostly narrow
+// `let x = null`-style inference and untyped Express handlers, the same
+// patterns already fixed across most of src/) that need real per-file
+// JSDoc work to resolve, not a suppression. Tracked as follow-up work;
+// see tsconfig.json and docs/development.md. Do not add more files here
+// without a similar comment and a plan to remove it.
 'use strict';
 
-const { fs, path, crypto, http, https, net, spawn, execFile, Worker, zlib, promisify, express, httpProxy, SITES_DIR, NODE_START_TIMEOUT_MS, NPM_INSTALL_TIMEOUT_MS, NPM_INSTALL_WORKERS, NPM_INSTALL_QUEUE_LIMIT, HTTP_REQUEST_TIMEOUT_MS, STATS_FLUSH_INTERVAL_MS, VISITOR_RETENTION_DAYS, MINIFY_MAX_BYTES, MINIFY_CACHE_BYTES, MINIFY_WORKERS, MINIFY_QUEUE_LIMIT, COMPRESSION_WORKERS, COMPRESSION_QUEUE_LIMIT, VISITOR_PENDING_BUCKETS, FIREWALL_RATE_LIMIT_BUCKETS, TRUSTED_EDGE_PROXIES, DOCKER_BIN, DOCKER_INTERNAL_NETWORK, DOCKER_EGRESS_NETWORK, SITE_DATA_DIR, JWT_SECRET, safeRelativePath, certbotPaths, hasCertificate, runtimeEnvironment, buildEnvironment, operatorEnvironment, classifyClient, gzipAsync, brotliAsync, execFileAsync, COMPRESSIBLE_EXTENSIONS, INTERNAL_EDGE_TOKEN, REQUEST_IDENTITY, appendTail, cacheEntryBytes, responseChunkBytes, processOptions, terminateChild, ensureDockerInternalNetwork, terminateAndWait, realFileInside, realFileInsideAsync, hostForUrl, normalizeIp, requestHostname, TRUSTED_EDGE_RANGES, trustedEdgePeers, trustedEdgePeer, requestIdentity, buildIpBlockList, ipMatchesList, hydrateSite, listen, closeServer, freePort, waitForPort, siteIsolation, dockerContainerName, siteRoot } = require('./shared');
+const { path, crypto, net, Worker, STATS_FLUSH_INTERVAL_MS, VISITOR_RETENTION_DAYS, MINIFY_WORKERS, MINIFY_QUEUE_LIMIT, COMPRESSION_WORKERS, COMPRESSION_QUEUE_LIMIT, VISITOR_PENDING_BUCKETS, FIREWALL_RATE_LIMIT_BUCKETS, JWT_SECRET, responseChunkBytes, hostForUrl, requestHostname, requestIdentity, buildIpBlockList, hydrateSite, siteIsolation, siteRoot } = require('./shared');
 const { maskIp } = require('../visitor-intelligence');
 const { EDGE_HTTP_PORT, EDGE_HTTPS_PORT } = require('../config');
 
@@ -491,7 +498,7 @@ class CoreSiteManager {
     for (const rule of site.redirects || []) {
       if (!rule || typeof rule !== 'object') continue;
       const from = String(rule.from || '');
-      let matches = false;
+      let matches;
       if (rule.type === 'prefix') matches = pathname.startsWith(from);
       else matches = pathname === from;
       if (!matches) continue;

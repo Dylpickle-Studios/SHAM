@@ -120,6 +120,7 @@ function verifyWithJwk(parsed, jwk) {
   if (!allowed.has(algorithm)) throw new Error(`OIDC ID token uses unsupported signing algorithm ${algorithm || '(none)'}.`);
   const digest = algorithm.slice(-3).replace('256', 'sha256').replace('384', 'sha384').replace('512', 'sha512');
   const key = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+  /** @type {crypto.KeyObject | crypto.SignKeyObjectInput | crypto.VerifyKeyObjectInput} */
   let options = key;
   if (algorithm.startsWith('PS')) options = { key, padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST };
   else if (algorithm.startsWith('ES')) options = { key, dsaEncoding: 'ieee-p1363' };

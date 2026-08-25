@@ -8,9 +8,13 @@
     "start": "node src/bootstrap.js",
     "dev": "node --watch src/server.js",
     "runtime-agent": "node runtime-agent/index.js",
-    "check": "node scripts/check-syntax.js",
+    "check:syntax": "node scripts/check-syntax.js",
+    "lint": "eslint src bin runtime-agent scripts test public",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run check:syntax && npm run lint && npm run typecheck",
     "test": "node --test test/*.test.js",
     "security": "npm audit --omit=dev --audit-level=high",
+    "verify": "npm run check && npm test && npm run security",
     "release:check": "npm run check && npm test && node scripts/release-check.js"
   },
   "engines": {
@@ -41,5 +45,17 @@
   ],
   "bin": {
     "sham": "bin/sham.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/express": "^5.0.6",
+    "@types/http-proxy": "^1.17.17",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^26.3.0",
+    "eslint": "^10.9.1",
+    "globals": "^17.11.0",
+    "typescript": "^7.0.2"
   }
 }

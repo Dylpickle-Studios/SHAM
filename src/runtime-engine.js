@@ -7,12 +7,19 @@ const http = require('node:http');
 const https = require('node:https');
 const { spawn } = require('node:child_process');
 const { DATA_DIR } = require('./config');
-const { runtimeEnvironment, operatorEnvironment } = require('./process-env');
+const { runtimeEnvironment } = require('./process-env');
 
+/** @typedef {import('node:child_process').ChildProcess} ChildProcess */
+
+/** @param {import('node:child_process').SpawnOptions} [options] */
 function runtimeProcessOptions(options = {}) {
   return { ...options, detached: process.platform !== 'win32' };
 }
 
+/**
+ * @param {ChildProcess | null | undefined} child
+ * @param {NodeJS.Signals} [signal]
+ */
 function terminateProcess(child, signal = 'SIGTERM') {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   try {
@@ -23,6 +30,11 @@ function terminateProcess(child, signal = 'SIGTERM') {
   }
 }
 
+/**
+ * @param {ChildProcess | null | undefined} child
+ * @param {number} [graceMs]
+ * @returns {Promise<void>}
+ */
 function terminateProcessAndWait(child, graceMs = 10_000) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   return new Promise((resolve) => {
@@ -98,6 +110,11 @@ function lineLogger(stream, onLine, { maxLinesPerSecond = 200, maxLineLength = 1
   return () => { stream.off('data', onData); stream.off('end', onEnd); buffer = ''; truncated = false; };
 }
 
+/**
+ * @param {string | string[]} command
+ * @param {{ cwd?: string, env?: Record<string, string>, stdio?: import('node:child_process').StdioOptions }} [options]
+ * @returns {ChildProcess}
+ */
 function shellCommand(command, { cwd, env, stdio = ['ignore', 'pipe', 'pipe'] } = {}) {
   const options = runtimeProcessOptions({ cwd, env: runtimeEnvironment(env), stdio });
   if (Array.isArray(command)) {
@@ -110,14 +127,23 @@ function shellCommand(command, { cwd, env, stdio = ['ignore', 'pipe', 'pipe'] } 
   return spawn('/bin/sh', ['-lc', value], options);
 }
 
+/** @typedef {{ ok: boolean, message?: string }} ProbeResult */
+
+/**
+ * @param {string | string[]} command
+ * @param {{ cwd?: string, env?: Record<string, string>, timeoutMs?: number }} [options]
+ * @returns {Promise<ProbeResult>}
+ */
 function commandExit(command, { cwd, env, timeoutMs = 5000 } = {}) {
   return new Promise((resolve) => {
+    /** @type {ChildProcess} */
     let child;
     try { child = shellCommand(command, { cwd, env, stdio: 'ignore' }); }
-    catch (error) { resolve({ ok: false, message: error.message }); return; }
+    catch (error) { resolve({ ok: false, message: error instanceof Error ? error.message : String(error) }); return; }
     let settled = false;
     const timer = setTimeout(() => { terminateProcess(child, 'SIGKILL'); finish(false, 'Readiness command timed out.'); }, timeoutMs);
     timer.unref?.();
+    /** @param {boolean} ok @param {string} [message] */
     const finish = (ok, message = '') => {
       if (settled) return;
       settled = true;
@@ -159,28 +185,34 @@ function httpProbe({ host, port, path: pathname = '/', statusMin = 200, statusMa
   });
 }
 
+/**
+ * @param {import('./types/runtime').RuntimeSpec & { cwd?: string, host?: string, internalPort?: number }} spec
+ * @param {{ child?: ChildProcess | null, cwd?: string, env?: Record<string, string>, host?: string, port?: number, log?: (message: string) => void }} [options]
+ * @returns {Promise<boolean>}
+ */
 async function waitForReadiness(spec, { child = null, cwd = spec.cwd, env = {}, host = spec.host, port = spec.internalPort, log = () => {} } = {}) {
   const probe = spec.readiness || { type: 'tcp', timeoutMs: 30_000 };
   const deadline = Date.now() + Math.max(1000, Number(probe.timeoutMs || 30_000));
   let lastMessage = 'Runtime did not become ready.';
+  /** @type {Error | null} */
   let childError = null;
-  const onChildError = (error) => { childError = error; };
+  const onChildError = (/** @type {Error} */ error) => { childError = error; };
   child?.once('error', onChildError);
   try {
     do {
-      if (childError) throw new Error(`Runtime process could not start: ${childError.message}`);
+      if (childError) throw new Error(`Runtime process could not start: ${/** @type {Error} */ (childError).message}`);
       if (child && (child.exitCode !== null || child.signalCode !== null)) throw new Error(`Runtime exited during startup${child.exitCode !== null ? ` with code ${child.exitCode}` : child.signalCode ? ` after ${child.signalCode}` : ''}.`);
       let result;
       if (probe.type === 'none') {
         // A disabled probe still waits one event-loop turn so spawn errors and immediate exits
         // cannot be promoted as a healthy runtime.
         await new Promise((resolve) => setImmediate(resolve));
-        if (childError) throw new Error(`Runtime process could not start: ${childError.message}`);
+        if (childError) throw new Error(`Runtime process could not start: ${/** @type {Error} */ (childError).message}`);
         if (child && (child.exitCode !== null || child.signalCode !== null)) throw new Error(`Runtime exited during startup${child.exitCode !== null ? ` with code ${child.exitCode}` : child.signalCode ? ` after ${child.signalCode}` : ''}.`);
         return true;
       }
       if (probe.type === 'http') result = await httpProbe({ host, port, path: probe.path, statusMin: probe.statusMin, statusMax: probe.statusMax, headers: { Host: spec.site?.domain || host, 'User-Agent': 'SHAM-Readiness/1.0' } });
-      else if (probe.type === 'command') result = await commandExit(probe.command, { cwd, env, timeoutMs: Math.min(5000, Math.max(1000, deadline - Date.now())) });
+      else if (probe.type === 'command') result = await commandExit(probe.command || '', { cwd, env, timeoutMs: Math.min(5000, Math.max(1000, deadline - Date.now())) });
       else result = await tcpProbe(host, port);
       if (result.ok) return true;
       lastMessage = result.message || lastMessage;

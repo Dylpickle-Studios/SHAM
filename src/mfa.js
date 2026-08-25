@@ -68,7 +68,7 @@ function generateTotpSetup(username, issuer = 'SHAM') {
 }
 
 function generateRecoveryCodes(count = 10) {
-  return Array.from({ length: count }, () => crypto.randomBytes(5).toString('hex').toUpperCase().match(/.{1,5}/g).join('-'));
+  return Array.from({ length: count }, () => (crypto.randomBytes(5).toString('hex').toUpperCase().match(/.{1,5}/g) || []).join('-'));
 }
 
 function hashRecoveryCode(code) {

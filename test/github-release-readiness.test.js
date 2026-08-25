@@ -31,7 +31,7 @@ test('GitHub CI and GHCR release workflows enforce validation and narrow permiss
   const ci = read('.github/workflows/ci.yml');
   const docker = read('.github/workflows/docker-publish.yml');
   const release = read('.github/workflows/release.yml');
-  assert.match(ci, /permissions:\n  contents: read/);
+  assert.match(ci, /permissions:\n {2}contents: read/);
   assert.match(ci, /npm run release:check/);
   assert.match(ci, /npm audit --omit=dev --audit-level=high/);
   assert.match(ci, /Docker smoke build/);

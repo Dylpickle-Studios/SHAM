@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const vm = require('node:vm');
 const AdmZip = require('adm-zip');
 const { parentPort, workerData } = require('node:worker_threads');
+if (!parentPort) throw new Error('This module must run inside a worker thread.');
 const { normalizeTrustedKeys, canonical } = require('./plugin-signing');
 
 const MAX_UPDATE_BYTES = 512 * 1024 * 1024;
@@ -45,8 +46,8 @@ function validateJavaScript(root) {
     if (stat.size > 16 * 1024 * 1024) throw new Error(`JavaScript file “${relative}” exceeds the 16 MB update validation limit.`);
     let source = fs.readFileSync(filename, 'utf8');
     if (source.startsWith('#!')) source = source.replace(/^#!.*(?:\r?\n|$)/, '');
-    try { new vm.Script(source, { filename: relative, displayErrors: true }); }
-    catch (error) { throw new Error(`JavaScript syntax check failed for “${relative}”: ${error.message}`); }
+    try { new vm.Script(source, { filename: relative }); }
+    catch (error) { throw new Error(`JavaScript syntax check failed for “${relative}”: ${error instanceof Error ? error.message : String(error)}`); }
   }
 }
 

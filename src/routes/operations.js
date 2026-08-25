@@ -10,7 +10,7 @@ function registerOperationsRoutes(ctx) {
     app, requireAuth, requireAdmin, webhookLimiter, serializeSiteMutation, db, crypto, DEPLOY_WEBHOOK_DUMMY_SECRET,
     operationsManager, manager, recordAudit, getSiteOr404, bool, validateSiteInput, uniqueSlug, writeSiteConfig,
     getSecretSetting, setSecretSetting, getSetting, setSetting, cloudflareTunnels, legacyCloudflareTunnel, cloudflareTunnelControlPlane, updateManager, verifyPassword, stepUpLimiter,
-    multipart, updateUpload, cleanupUploadedFiles
+    multipart, updateUpload
   } = ctx;
 
   const tunnelExposureWarning = (site, tunnel) => {
@@ -188,10 +188,12 @@ function authenticateDeployWebhook(req, res, next) {
         buildOutputDir: req.body.buildOutputDir ?? site.build_output_dir,
         approveManifestChanges: bool(req.body.approveManifestChanges, false)
       });
+      /** @type {{ action?: string } | null} */
       let webhook = null;
+      /** @type {string | null} */
       let webhookWarning = null;
       try { webhook = await operationsManager.configureProviderWebhook(manager.getSite(site.id), getSetting('git_webhook_base_url', '')); }
-      catch (error) { webhookWarning = error.message; manager.log(site.id, 'error', `Git provider webhook configuration failed: ${error.message}`); }
+      catch (error) { const message = error instanceof Error ? error.message : String(error); webhookWarning = message; manager.log(site.id, 'error', `Git provider webhook configuration failed: ${message}`); }
       const warning = [release.warning, webhookWarning].filter(Boolean).join(' ') || null;
       recordAudit(req.user.id, 'site.git.deploy', { siteId: site.id, releaseId: release.id, branch: req.body.branch || site.git_branch, webhook: webhook?.action || null, warning: Boolean(warning) });
       res.json({ release, site: manager.decorate(manager.getSite(site.id)), webhook, warning });
@@ -465,6 +467,7 @@ function authenticateDeployWebhook(req, res, next) {
         otelEndpoint = parsedEndpoint.toString();
       }
       const clearOtelHeaders = bool(body.clearOtelHeaders, false);
+      /** @type {string | null} */
       let serializedOtelHeaders = null;
       if (has('otelHeaders')) {
         if (!body.otelHeaders || typeof body.otelHeaders !== 'object' || Array.isArray(body.otelHeaders)) throw new Error('OpenTelemetry headers must be a JSON object.');
@@ -487,6 +490,7 @@ function authenticateDeployWebhook(req, res, next) {
       if (locale !== null && !['en', 'nl', 'de'].includes(locale)) throw new Error('Locale must be English, Dutch, or German.');
       const updateChannel = has('updateChannel') ? String(body.updateChannel) : null;
       if (updateChannel !== null && !['stable', 'preview'].includes(updateChannel)) throw new Error('Update channel is invalid.');
+      /** @type {string | null} */
       let gitWebhookBaseUrl = null;
       if (has('gitWebhookBaseUrl')) {
         gitWebhookBaseUrl = String(body.gitWebhookBaseUrl || '').trim();

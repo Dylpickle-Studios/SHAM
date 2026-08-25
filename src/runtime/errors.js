@@ -3,6 +3,10 @@
 const { ERROR_CODES } = require('./protocol');
 
 class RuntimeAgentError extends Error {
+  /**
+   * @param {string} message
+   * @param {typeof ERROR_CODES[keyof typeof ERROR_CODES]} [code]
+   */
   constructor(message, code = ERROR_CODES.OPERATION_FAILED) {
     super(message);
     this.name = 'RuntimeAgentError';

@@ -13,6 +13,35 @@ const {
 
 const MANAGED_LABEL = 'sham.managed=true';
 
+class AgentOperationError extends Error {
+  /**
+   * @param {string} message
+   * @param {'NOT_FOUND' | 'NOT_OWNED'} code
+   */
+  constructor(message, code) {
+    super(message);
+    this.name = 'AgentOperationError';
+    this.code = code;
+  }
+}
+
+/**
+ * @typedef {Object} RunToolOptions
+ * @property {string} [cwd]
+ * @property {Record<string, string>} [env]
+ * @property {number} [timeoutMs]
+ * @property {((level: 'info' | 'error', line: string) => void) | null} [onLine]
+ * @property {number} [maxOutputBytes]
+ * @property {boolean} [rejectOutputOverflow]
+ */
+/** @typedef {{ stdout: string, stderr: string, code: 0 }} RunToolResult */
+
+/**
+ * @param {string} bin
+ * @param {string[]} args
+ * @param {RunToolOptions} [options]
+ * @returns {Promise<RunToolResult>}
+ */
 function runTool(bin, args, { cwd, env, timeoutMs = 20 * 60_000, onLine = null, maxOutputBytes = 200_000, rejectOutputOverflow = false } = {}) {
   return new Promise((resolve, reject) => {
     let child;
@@ -59,6 +88,11 @@ function runTool(bin, args, { cwd, env, timeoutMs = 20 * 60_000, onLine = null, 
   });
 }
 
+/**
+ * @param {string} bin
+ * @param {string[]} args
+ * @param {{ cwd?: string, env?: Record<string, string> }} [options]
+ */
 function spawnStreaming(bin, args, { cwd, env } = {}) {
   return spawn(bin, args, { cwd, env: { ...operatorEnvironment(), ...(env || {}) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 }
@@ -98,8 +132,8 @@ function isManaged(inspected) {
 
 async function assertOwnedContainer(ref) {
   const inspected = await inspectRef(ref);
-  if (!inspected) { const error = new Error('Container not found.'); error.code = 'NOT_FOUND'; throw error; }
-  if (!isManaged(inspected)) { const error = new Error('Container is not managed by SHAM.'); error.code = 'NOT_OWNED'; throw error; }
+  if (!inspected) throw new AgentOperationError('Container not found.', 'NOT_FOUND');
+  if (!isManaged(inspected)) throw new AgentOperationError('Container is not managed by SHAM.', 'NOT_OWNED');
   return inspected;
 }
 
@@ -246,31 +280,31 @@ async function containersPort({ name, containerPort, timeoutMs }) {
 async function containersLogs({ name }, emit) {
   const containerName = assertContainerName(name, 'Container name');
   await assertOwnedContainer(containerName);
-  return new Promise((resolve) => {
+  return /** @type {Promise<void>} */ (new Promise((resolve) => {
     const child = spawnStreaming(DOCKER_BIN, ['logs', '-f', '--tail', '200', containerName]);
     child.stdout.on('data', (chunk) => emit({ type: 'log', level: 'info', line: chunk.toString().trimEnd() }));
     child.stderr.on('data', (chunk) => emit({ type: 'log', level: 'error', line: chunk.toString().trimEnd() }));
     const finish = () => { emit({ type: 'result', data: {} }); resolve(); };
     child.once('exit', finish);
     child.once('error', finish);
-  });
+  }));
 }
 
 async function containersWait({ name }, emit) {
   const containerName = assertContainerName(name, 'Container name');
   await assertOwnedContainer(containerName);
-  return new Promise((resolve) => {
+  return /** @type {Promise<void>} */ (new Promise((resolve) => {
     const child = spawnStreaming(DOCKER_BIN, ['wait', containerName]);
     let output = '';
     child.stdout.on('data', (chunk) => { output = `${output}${chunk}`.slice(-64); });
     const finish = () => {
-      const code = Number.parseInt(output.trim().split(/\s+/).at(-1), 10);
+      const code = Number.parseInt(output.trim().split(/\s+/).at(-1) || '', 10);
       emit({ type: 'result', data: { exitCode: Number.isInteger(code) ? code : null } });
       resolve();
     };
     child.once('exit', finish);
     child.once('error', finish);
-  });
+  }));
 }
 
 async function containersExec({ name, command, timeoutMs }, emit) {

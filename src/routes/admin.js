@@ -5,11 +5,11 @@ const { validateManifest } = require('../plugin-manager');
 function registerAdminRoutes(ctx) {
   const {
     app, requireAuth, requireAdmin, pluginManager, publicUser, multipart, pluginUpload, validatePluginArchiveFile,
-    bool, cleanupUploadedFiles, serializePluginMutation, integrationSettings, securitySettings, oidcSettings, normalizeOidcIssuer, normalizeUsername, getSetting, setSetting,
+    bool, integrationSettings, securitySettings, oidcSettings, normalizeOidcIssuer, normalizeUsername, getSetting, setSetting,
     setSecretSetting, getSecretSetting, rotateMasterKey, verifyPassword, hashPassword, rotateSessionVersion, stepUpLimiter, writeCloudflareCredentials, recordAudit,
-    manager, siteRows, getSiteOr404, syncCloudflareRecord, cloudflarePortWarning, syncCloudflareFirewall,
+    manager, getSiteOr404, syncCloudflareRecord, cloudflarePortWarning, syncCloudflareFirewall,
     acquireCertificateOperation, releaseCertificateOperation, stopRunningSitesOnPort, renewalNeedsPort80, issueCertificate,
-    hasCertificate, restoreEnabledSites, renewCertificates, db, activeAdminCount, registrationEnabled, integerSetting,
+    restoreEnabledSites, renewCertificates, db, activeAdminCount, registrationEnabled, integerSetting,
     net, crypto, edgeProxy, EDGE_HTTP_PORT, DASHBOARD_PORT
   } = ctx;
 
@@ -286,6 +286,7 @@ app.get('/api/plugins', requireAuth, (req, res) => res.json({
         onLine: (level, line) => manager.log(site.id, level, `certbot: ${line.slice(0, 1000)}`)
       });
       db.prepare('UPDATE sites SET ssl_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(site.id);
+      /** @type {string | null} */
       let warning = null;
       try { await edgeProxy.reloadTls(); }
       catch (error) {

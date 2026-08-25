@@ -12,6 +12,12 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 class ValidationError extends Error {}
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @param {{ maxLength?: number }} [options]
+ * @returns {string}
+ */
 function assertString(value, label, { maxLength = 4096 } = {}) {
   if (typeof value !== 'string' || !value || value.length > maxLength || /\0/.test(value)) {
     throw new ValidationError(`${label} is missing or invalid.`);
@@ -19,41 +25,67 @@ function assertString(value, label, { maxLength = 4096 } = {}) {
   return value;
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} [label]
+ */
 function assertContainerName(value, label = 'Container name') {
-  assertString(value, label);
-  if (!NAME_RE.test(value)) throw new ValidationError(`${label} does not match the SHAM-managed naming convention.`);
-  return value;
+  const name = assertString(value, label);
+  if (!NAME_RE.test(name)) throw new ValidationError(`${label} does not match the SHAM-managed naming convention.`);
+  return name;
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} [label]
+ */
 function assertComposeProject(value, label = 'Compose project') {
-  assertString(value, label);
-  if (!PROJECT_RE.test(value)) throw new ValidationError(`${label} does not match the SHAM-managed naming convention.`);
-  return value;
+  const project = assertString(value, label);
+  if (!PROJECT_RE.test(project)) throw new ValidationError(`${label} does not match the SHAM-managed naming convention.`);
+  return project;
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} [label]
+ */
 function assertImageTag(value, label = 'Image tag') {
-  assertString(value, label, { maxLength: 512 });
-  if (!TAG_RE.test(value)) throw new ValidationError(`${label} is invalid.`);
-  return value;
+  const tag = assertString(value, label, { maxLength: 512 });
+  if (!TAG_RE.test(tag)) throw new ValidationError(`${label} is invalid.`);
+  return tag;
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} [label]
+ */
 function assertManagedImageTag(value, label = 'Image tag') {
-  assertImageTag(value, label);
-  if (!MANAGED_TAG_RE.test(value)) throw new ValidationError(`${label} must be a SHAM-managed site image.`);
-  return value;
+  const tag = assertImageTag(value, label);
+  if (!MANAGED_TAG_RE.test(tag)) throw new ValidationError(`${label} must be a SHAM-managed site image.`);
+  return tag;
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} [label]
+ */
 function assertNetworkName(value, label = 'Network name') {
-  assertString(value, label);
-  if (!NETWORK_RE.test(value)) throw new ValidationError(`${label} is invalid.`);
-  return value;
+  const name = assertString(value, label);
+  if (!NETWORK_RE.test(name)) throw new ValidationError(`${label} is invalid.`);
+  return name;
 }
 
+/**
+ * @param {unknown} env
+ * @param {string} [label]
+ * @returns {Record<string, string>}
+ */
 function assertEnv(env, label = 'Environment') {
   if (env === undefined || env === null) return {};
   if (typeof env !== 'object' || Array.isArray(env)) throw new ValidationError(`${label} must be an object.`);
   const entries = Object.entries(env);
   if (entries.length > 200) throw new ValidationError(`${label} defines too many variables.`);
+  /** @type {Record<string, string>} */
   const result = {};
   for (const [key, raw] of entries) {
     if (!ENV_KEY_RE.test(key)) throw new ValidationError(`${label} variable name "${key}" is invalid.`);
@@ -64,24 +96,34 @@ function assertEnv(env, label = 'Environment') {
   return result;
 }
 
-function assertCommandString(value, label = 'Command') {
-  assertString(value, label, { maxLength: 8192 });
-  return value;
+/**
+ * @param {unknown} value
+ * @param {string} [label]
+ * @param {{ maxLength?: number }} [options]
+ */
+function assertCommandString(value, label = 'Command', { maxLength = 8192 } = {}) {
+  return assertString(value, label, { maxLength });
 }
 
 // Every filesystem path the agent is asked to touch must resolve inside the
 // shared data root (the same volume the control plane writes into). This is
 // re-checked here even though the control plane already validated it, because
 // the agent must not trust the control plane process is uncompromised.
+/**
+ * @param {string} root
+ * @param {unknown} candidate
+ * @param {string} [label]
+ */
 function assertPathInsideRoot(root, candidate, label = 'Path') {
-  assertString(candidate, label, { maxLength: 4096 });
+  const candidatePath = assertString(candidate, label, { maxLength: 4096 });
   let resolvedRoot;
   let resolvedTarget;
   try {
     resolvedRoot = fs.realpathSync(root);
-    resolvedTarget = fs.realpathSync(candidate);
+    resolvedTarget = fs.realpathSync(candidatePath);
   } catch (error) {
-    throw new ValidationError(`${label} could not be resolved: ${error.message}`);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new ValidationError(`${label} could not be resolved: ${message}`);
   }
   const base = `${resolvedRoot}${path.sep}`;
   if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(base)) {
@@ -90,12 +132,22 @@ function assertPathInsideRoot(root, candidate, label = 'Path') {
   return resolvedTarget;
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} [label]
+ */
 function assertPort(value, label = 'Port') {
   const port = Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new ValidationError(`${label} is invalid.`);
   return port;
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @param {{ min?: number, max?: number, fallback?: number }} [options]
+ * @returns {number}
+ */
 function assertPositiveInt(value, label, { min = 0, max = Number.MAX_SAFE_INTEGER, fallback = undefined } = {}) {
   if (value === undefined || value === null || value === '') {
     if (fallback !== undefined) return fallback;

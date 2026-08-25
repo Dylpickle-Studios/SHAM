@@ -19,7 +19,7 @@ class CappedDiskStorage {
         fileBytes += chunk.length;
         req.shamUploadBytes = (req.shamUploadBytes || 0) + chunk.length;
         if (fileBytes > this.maxBytes || req.shamUploadBytes > this.maxBytes) {
-          const error = new Error('Upload exceeds the configured size limit.');
+          const error = /** @type {NodeJS.ErrnoException} */ (new Error('Upload exceeds the configured size limit.'));
           error.code = 'LIMIT_FILE_SIZE';
           done(error);
           return;

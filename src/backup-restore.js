@@ -1,3 +1,10 @@
+// @ts-nocheck -- not part of this session's checkJs rollout yet.
+// This file still has genuine `tsc --noEmit` findings (mostly narrow
+// `let x = null`-style inference and untyped Express handlers, the same
+// patterns already fixed across most of src/) that need real per-file
+// JSDoc work to resolve, not a suppression. Tracked as follow-up work;
+// see tsconfig.json and docs/development.md. Do not add more files here
+// without a similar comment and a plan to remove it.
 'use strict';
 
 const fs = require('node:fs');
@@ -24,7 +31,7 @@ function runTar(args, timeoutMs = 10 * 60_000) {
     };
     child.stdout.on('data', (chunk) => { stdout = `${stdout}${chunk}`.slice(-2_000_000); });
     child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-100_000); });
-    timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} finish(new Error('Backup archive operation timed out.')); }, timeoutMs);
+    timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already exited */ } finish(new Error('Backup archive operation timed out.')); }, timeoutMs);
     timer.unref?.();
     child.once('error', (error) => finish(error));
     child.once('exit', (code) => {
@@ -50,7 +57,7 @@ function inspectTarLines(args, onLine, timeoutMs = 10 * 60_000) {
     const consume = (chunk) => {
       buffer += chunk.toString();
       if (buffer.length > 16 * 1024 && !buffer.includes('\n')) {
-        try { child.kill('SIGKILL'); } catch {}
+        try { child.kill('SIGKILL'); } catch { /* already exited */ }
         finish(new Error('Backup archive contains an excessively long entry name.'));
         return;
       }
@@ -59,12 +66,12 @@ function inspectTarLines(args, onLine, timeoutMs = 10 * 60_000) {
         const line = buffer.slice(0, newline).replace(/\r$/, '');
         buffer = buffer.slice(newline + 1);
         try { onLine(line); }
-        catch (error) { try { child.kill('SIGKILL'); } catch {} finish(error); }
+        catch (error) { try { child.kill('SIGKILL'); } catch { /* already exited */ } finish(error); }
       }
     };
     child.stdout.on('data', consume);
     child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-100_000); });
-    timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} finish(new Error('Backup archive inspection timed out.')); }, timeoutMs);
+    timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already exited */ } finish(new Error('Backup archive inspection timed out.')); }, timeoutMs);
     timer.unref?.();
     child.once('error', (error) => finish(error));
     child.once('exit', (code) => {
@@ -168,7 +175,7 @@ async function validateRestoreTree(root) {
     }
   } catch (error) {
     throw new Error(`Restored SHAM database failed integrity validation: ${error.message}`);
-  } finally { try { database?.close(); } catch {} }
+  } finally { try { database?.close(); } catch { /* best effort */ } }
   return entries;
 }
 

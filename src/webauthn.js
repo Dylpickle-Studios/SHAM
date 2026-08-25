@@ -160,7 +160,10 @@ function registrationOptions({ user, rpId, rpName = 'SHAM', existing = [] }) {
 
 function verifyRegistration({ response, challenge, rpId, origins }) {
   if (response?.type !== 'public-key') throw new Error('Passkey response type is invalid.');
-  const client = parseClientData(response.response?.clientDataJSON, 'webauthn.create', challenge, origins);
+  // Mirrors verifyAssertion below: without this, registration never checked
+  // that clientDataJSON's type/challenge/origin matched what the server
+  // issued, so a stale or cross-origin registration ceremony could complete.
+  parseClientData(response.response?.clientDataJSON, 'webauthn.create', challenge, origins);
   const attestation = decodeCbor(fromB64url(response.response?.attestationObject));
   if (!(attestation instanceof Map) || attestation.get('fmt') !== 'none') throw new Error('Only privacy-preserving “none” passkey attestation is accepted.');
   const authData = attestation.get('authData');

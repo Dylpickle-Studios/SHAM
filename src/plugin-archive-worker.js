@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { parentPort, workerData } = require('node:worker_threads');
+if (!parentPort) throw new Error('This module must run inside a worker thread.');
 const { extractPlugin } = require('./plugin-archive');
 const { verifyPluginSignature, normalizeTrustedKeys } = require('./plugin-signing');
 

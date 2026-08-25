@@ -1,9 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 
-const { root, source: read } = require('./source-tree');
+const { source: read } = require('./source-tree');
 
 test('safe-deployment configuration rejects incompatible isolation and anti-bot combinations', () => {
   const { validateSiteInput } = require('../src/validation');
@@ -49,7 +47,7 @@ test('Anubis sidecars are pinned, resource-limited, and use host-visible mounts'
   assert.match(agentDocker, /'--cpus', '1'/);
   assert.match(agentDocker, /'--pids-limit', '128'/);
   assert.match(source, /this\.anubisPolicy\(site, metricsPort\)/);
-  assert.match(source, /metrics:\\n  bind: \\\"127\.0\.0\.1:\$\{metricsPort\}\\\"/);
+  assert.match(source, /metrics:\\n {2}bind: "127\.0\.0\.1:\$\{metricsPort\}"/);
   assert.doesNotMatch(source, /METRICS_BIND=/);
 });
 

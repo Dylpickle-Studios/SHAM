@@ -1,9 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 
-const { root, source: read } = require('./source-tree');
+const { source: read } = require('./source-tree');
 
 function routeLines(server) {
   return server.split('\n').filter((line) => /app\.(?:get|post|put|patch|delete|all)\('\/?/.test(line));

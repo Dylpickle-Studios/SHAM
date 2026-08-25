@@ -361,7 +361,7 @@ function playgroundSrcdoc(manifest, clientSource) {
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
   :root{font-family:Inter,system-ui,sans-serif;color:#f7f2ff;background:#0c0717}*{box-sizing:border-box}body{margin:0;padding:18px;background:linear-gradient(135deg,#0c0717,#150c26);min-height:100vh}.shell{display:grid;gap:14px}.panel,.stat-card{border:1px solid rgba(220,197,255,.18);border-radius:14px;background:#1d1230;padding:14px}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}.stat-card{display:grid;gap:4px}.stat-card span,.muted{color:#ad9bc4;font-size:12px}.stat-card strong{font-size:22px}.nav{display:flex;gap:8px;flex-wrap:wrap}.nav button{border:1px solid rgba(220,197,255,.18);border-radius:9px;padding:8px 10px;background:#281842;color:#f7f2ff;cursor:pointer}.nav button.active{border-color:#a970ff;background:rgba(169,112,255,.16)}pre{white-space:pre-wrap;overflow-wrap:anywhere;color:#ffb3c3}.plugin-content{display:grid;gap:10px}</style></head><body><div id="root" class="shell"></div><script>
   const manifest=${manifestJson}; const fallback=${declarative}; const root=document.getElementById('root');
-  function esc(v){return String(v??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));}
+  function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
   function renderDefinition(def){
     root.innerHTML=''; const title=document.createElement('div'); title.className='panel'; title.innerHTML='<strong>'+esc(def.name||manifest.name)+'</strong><div class="muted">'+esc(def.id||manifest.id)+' · sandbox preview</div>'; root.append(title);
     const cards=(def.dashboardCards||def.ui?.dashboardCards||[]).slice(0,24); if(cards.length){const grid=document.createElement('div');grid.className='stats';for(const card of cards){const item=document.createElement('div');item.className='stat-card';item.innerHTML='<span>'+esc(card.label||'Card')+'</span><strong>'+esc(card.value??'…')+'</strong><span>'+esc(card.description||'')+'</span>';grid.append(item)}root.append(grid)}
@@ -372,7 +372,7 @@ function playgroundSrcdoc(manifest, clientSource) {
   window.SHAM={registerPlugin(def){if(!def||String(def.id||'')!==String(manifest.id))throw new Error('Client plugin ID must match plugin.json');renderDefinition(def)},api:async()=>({playground:true,count:3}),toast:()=>{},getSites:()=>[],getUser:()=>({username:'playground',role:'admin'})};
   window.addEventListener('error',event=>{const pre=document.createElement('pre');pre.textContent=event.error?.stack||event.message;root.append(pre)});
   ${source ? source : `window.SHAM.registerPlugin(fallback);`}
-  <\/script></body></html>`;
+  <\/script></body></html>`; // eslint-disable-line no-useless-escape -- deliberate: this literal `</script>` sits inside the generated HTML/JS source, and the backslash prevents it from prematurely closing that tag.
 }
 
 $('#plugin-playground-button').addEventListener('click', openPluginPlayground);

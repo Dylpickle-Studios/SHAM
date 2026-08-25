@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { parentPort, workerData } = require('node:worker_threads');
+if (!parentPort) throw new Error('This module must run inside a worker thread.');
 const AdmZip = require('adm-zip');
 
 const EXCLUDED_DIRECTORIES = new Set(['node_modules', '.git', '.sham']);

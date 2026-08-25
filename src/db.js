@@ -94,8 +94,11 @@ db.exec(`
   );
 `);
 
+/** @typedef {{ cid: number, name: string, type: string, notnull: number, dflt_value: unknown, pk: number }} PragmaColumnRow */
+
 function columnsFor(table) {
-  return new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
+  const rows = /** @type {PragmaColumnRow[]} */ (db.prepare(`PRAGMA table_info(${table})`).all());
+  return new Set(rows.map((row) => row.name));
 }
 
 function ensureColumn(table, name, definition) {
@@ -616,7 +619,9 @@ ensureColumn('site_cloudflare_tunnels', 'managed_route', 'INTEGER NOT NULL DEFAU
 ensureColumn('site_cloudflare_tunnels', 'tunnel_only', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('site_cloudflare_tunnels', "connector_mode", "TEXT NOT NULL DEFAULT 'dedicated'");
 
-const oidcPasswordMigration = db.prepare("SELECT value FROM settings WHERE key = 'oidc_password_config_migrated'").get();
+/** @typedef {{ value: string }} SettingRow */
+
+const oidcPasswordMigration = /** @type {SettingRow | undefined} */ (db.prepare("SELECT value FROM settings WHERE key = 'oidc_password_config_migrated'").get());
 if (oidcPasswordMigration?.value !== '1') {
   db.transaction(() => {
     db.prepare('UPDATE users SET password_configured = 0 WHERE id IN (SELECT DISTINCT user_id FROM oidc_identities)').run();
@@ -631,7 +636,8 @@ ensureColumn('site_visitor_stats', 'client_type', "TEXT NOT NULL DEFAULT 'unknow
 ensureColumn('site_visitor_stats', 'user_agent', "TEXT NOT NULL DEFAULT ''");
 
 function visitorStatsPrimaryKey() {
-  return db.prepare('PRAGMA table_info(site_visitor_stats)').all()
+  const rows = /** @type {PragmaColumnRow[]} */ (db.prepare('PRAGMA table_info(site_visitor_stats)').all());
+  return rows
     .filter((row) => Number(row.pk) > 0)
     .sort((a, b) => Number(a.pk) - Number(b.pk))
     .map((row) => row.name);
@@ -697,8 +703,13 @@ tightenDatabasePermissions();
 const { migrateKnownSecrets } = require('./secret-store');
 migrateKnownSecrets(db);
 
+/**
+ * @param {string} key
+ * @param {string | null} [fallback]
+ * @returns {string | null}
+ */
 function getSetting(key, fallback = null) {
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+  const row = /** @type {SettingRow | undefined} */ (db.prepare('SELECT value FROM settings WHERE key = ?').get(key));
   return row ? row.value : fallback;
 }
 

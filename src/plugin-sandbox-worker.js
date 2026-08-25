@@ -2,6 +2,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { parentPort, workerData } = require('node:worker_threads');
+if (!parentPort) throw new Error('This module must run inside a worker thread.');
+const port = parentPort;
 
 let rpcCounter = 0;
 const pendingRpc = new Map();
@@ -12,7 +14,7 @@ const settingsCache = { ...(workerData.settings || {}) };
 function rpc(method, args = []) {
   if (pendingRpc.size >= MAX_PENDING_RPC) return Promise.reject(new Error('Plugin has too many pending host operations.'));
   const id = ++rpcCounter;
-  parentPort.postMessage({ type: 'rpc', id, method, args });
+  port.postMessage({ type: 'rpc', id, method, args });
   return new Promise((resolve, reject) => pendingRpc.set(id, { resolve, reject }));
 }
 
@@ -51,7 +53,7 @@ function context() {
       stop: (siteId) => { requirePermission('runtime:manage'); return rpc('runtime.stop', [siteId]); },
       restart: (siteId) => { requirePermission('runtime:manage'); return rpc('runtime.restart', [siteId]); }
     },
-    log: (message) => parentPort.postMessage({ type: 'log', message: String(message).slice(0, 2000) })
+    log: (message) => port.postMessage({ type: 'log', message: String(message).slice(0, 2000) })
   };
 }
 
@@ -64,8 +66,8 @@ async function activate() {
     Buffer, URL, URLSearchParams, TextEncoder, TextDecoder,
     setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask,
     console: {
-      log: (...args) => parentPort.postMessage({ type: 'log', message: args.map(String).join(' ').slice(0, 2000) }),
-      error: (...args) => parentPort.postMessage({ type: 'log', level: 'error', message: args.map(String).join(' ').slice(0, 2000) })
+      log: (...args) => port.postMessage({ type: 'log', message: args.map(String).join(' ').slice(0, 2000) }),
+      error: (...args) => port.postMessage({ type: 'log', level: 'error', message: args.map(String).join(' ').slice(0, 2000) })
     }
   };
   vm.createContext(sandbox, { name: `sham-plugin-${workerData.manifest.id}`, codeGeneration: { strings: false, wasm: false } });
@@ -74,10 +76,10 @@ async function activate() {
   const exported = module.exports;
   instance = typeof exported.activate === 'function' ? exported.activate(context()) || {} : exported;
   if (instance && typeof instance.then === 'function') throw new Error('Plugin activate() must return synchronously.');
-  parentPort.postMessage({ type: 'ready' });
+  port.postMessage({ type: 'ready' });
 }
 
-parentPort.on('message', async (message) => {
+port.on('message', async (message) => {
   if (message.type === 'rpc-result') {
     const pending = pendingRpc.get(message.id);
     if (!pending) return;
@@ -91,14 +93,14 @@ parentPort.on('message', async (message) => {
       const handler = instance?.api?.[message.action];
       if (typeof handler !== 'function') throw new Error('Plugin action not found.');
       const value = await handler({ ...(message.request || {}), data: context().data, settings: context().settings });
-      parentPort.postMessage({ type: 'result', id: message.id, value });
-    } catch (error) { parentPort.postMessage({ type: 'result', id: message.id, error: error.message }); }
+      port.postMessage({ type: 'result', id: message.id, value });
+    } catch (error) { port.postMessage({ type: 'result', id: message.id, error: error.message }); }
     return;
   }
   if (message.type === 'deactivate') {
-    try { await instance?.deactivate?.(); parentPort.postMessage({ type: 'deactivated', id: message.id }); }
-    catch (error) { parentPort.postMessage({ type: 'deactivated', id: message.id, error: error.message }); }
+    try { await instance?.deactivate?.(); port.postMessage({ type: 'deactivated', id: message.id }); }
+    catch (error) { port.postMessage({ type: 'deactivated', id: message.id, error: error.message }); }
   }
 });
 
-activate().catch((error) => parentPort.postMessage({ type: 'fatal', error: error.message }));
+activate().catch((error) => port.postMessage({ type: 'fatal', error: error.message }));

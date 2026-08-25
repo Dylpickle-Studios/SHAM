@@ -1,9 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 
-const { root, source } = require('./source-tree');
+const { source } = require('./source-tree');
 
 test('site mutations are serialized and large file routes use async helpers', () => {
   const server = source('src/server.js');

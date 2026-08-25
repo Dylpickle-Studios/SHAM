@@ -1,9 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 
-const { root, source: projectSource } = require('./source-tree');
+const { source: projectSource } = require('./source-tree');
 
 test('certificate issuance acquires its operation lock exactly once', () => {
   const source = projectSource('src/server.js');

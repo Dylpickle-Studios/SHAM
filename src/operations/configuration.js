@@ -2,8 +2,16 @@
 
 const { isEncrypted } = require('../secret-store');
 const { getRuntimeClient } = require('../runtime/client');
-const { fs, path, os, http, net, crypto, spawn, express, httpProxy, DATA_DIR, SITES_DIR, RELEASES_DIR, PREVIEWS_DIR, BACKUPS_DIR, SITE_DATA_DIR, GIT_BIN, TAR_BIN, RESTIC_BIN, AWS_BIN, SFTP_BIN, ANUBIS_IMAGE, JOB_POLL_INTERVAL_MS, JOB_TIMEOUT_MS, BACKUP_TIMEOUT_MS, GIT_TIMEOUT_MS, PREVIEW_TTL_HOURS, HTTP_REQUEST_TIMEOUT_MS, encrypt, decrypt, getSecretSetting, setSecretSetting, safeRelativePath, runtimeEnvironment, buildEnvironment, operatorEnvironment, appendTail, commandAvailable, processOptions, terminate, terminateAndWait, runProcess, runConfiguredCommand, parseField, parseCron, cronMatches, nextCronDate, safeName, pathInside, sftpQuote, freePort, closeServer, siteRoot, requiredFile, ensureRequiredFile, validateGitUrl, validateBranch } = require('./shared');
+const { fs, path, crypto, DATA_DIR, PREVIEWS_DIR, BACKUPS_DIR, TAR_BIN, RESTIC_BIN, AWS_BIN, SFTP_BIN, JOB_POLL_INTERVAL_MS, JOB_TIMEOUT_MS, BACKUP_TIMEOUT_MS, encrypt, decrypt, getSecretSetting, setSecretSetting, appendTail, runProcess, parseCron, cronMatches, nextCronDate, pathInside, sftpQuote, siteRoot } = require('./shared');
 
+/**
+ * Base of the OperationsManager mixin chain (ConfigurationOperations ->
+ * DeploymentOperations -> OperationsManager). `tick()` is only ever declared
+ * on the final OperationsManager subclass, but the scheduler started here in
+ * the base constructor calls `this.tick()` — safe in practice because the
+ * interval callback only fires after the full subclass has finished
+ * constructing, just not something TS's structural typing can see from here.
+ */
 class ConfigurationOperations {
   constructor({ db, manager, snapshotManager, edgeProxy = null }) {
     this.db = db;
@@ -25,7 +33,7 @@ class ConfigurationOperations {
     this.ensureJobSchedules();
     this.stalePreviewCleanupPromise = this.clearStalePreviews().catch((error) => this.manager.log(null, 'error', `Could not clean stale previews: ${error.message}`));
     getRuntimeClient().status().catch(() => {});
-    this.timer = setInterval(() => this.tick().catch((error) => this.manager.log(null, 'error', `Operations scheduler failed: ${error.message}`)), JOB_POLL_INTERVAL_MS);
+    this.timer = setInterval(() => (/** @type {{ tick: () => Promise<void> }} */ (/** @type {unknown} */ (this))).tick().catch((error) => this.manager.log(null, 'error', `Operations scheduler failed: ${error.message}`)), JOB_POLL_INTERVAL_MS);
     this.timer.unref?.();
   }
 
@@ -316,7 +324,7 @@ class ConfigurationOperations {
   }
 
   _backupSettings() {
-    let config = {};
+    let config;
     try { config = JSON.parse(getSecretSetting(this.db, 'backup_config', '{}')); } catch { config = {}; }
     return {
       enabled: this.db.prepare("SELECT value FROM settings WHERE key = 'backup_enabled'").get()?.value === '1',
@@ -400,6 +408,7 @@ class ConfigurationOperations {
       const stat = await fs.promises.stat(localPath);
       const config = settings.config || {};
       let destination = provider;
+      /** @type {string | null} */
       let externalLocalDirectory = null;
 
       if (provider === 'local' && config.destination) {

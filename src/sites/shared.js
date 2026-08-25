@@ -14,6 +14,7 @@ const zlib = require('node:zlib');
 const { promisify } = require('node:util');
 const express = require('express');
 const httpProxy = require('http-proxy');
+const { getRuntimeClient } = require('../runtime/client');
 const {
   SITES_DIR,
   NODE_START_TIMEOUT_MS,
@@ -46,6 +47,7 @@ const { classifyClient } = require('../visitor-intelligence');
 const gzipAsync = promisify(zlib.gzip);
 const brotliAsync = promisify(zlib.brotliCompress);
 const execFileAsync = promisify(execFile);
+/** @type {Promise<string> | null} */
 let dockerInternalNetworkPromise = null;
 const COMPRESSIBLE_EXTENSIONS = new Set(['.html', '.htm', '.css', '.js', '.mjs', '.json', '.svg', '.xml', '.txt', '.csv', '.map', '.wasm']);
 const INTERNAL_EDGE_TOKEN = crypto.randomBytes(32).toString('base64url');
@@ -67,7 +69,7 @@ function cacheEntryBytes(entry) {
 
 function responseChunkBytes(chunk, encoding) {
   if (chunk === undefined || chunk === null || typeof chunk === 'function') return 0;
-  if (typeof chunk === 'string') return Buffer.byteLength(chunk, typeof encoding === 'string' ? encoding : undefined);
+  if (typeof chunk === 'string') return Buffer.byteLength(chunk, /** @type {BufferEncoding | undefined} */ (typeof encoding === 'string' ? encoding : undefined));
   if (Buffer.isBuffer(chunk) || ArrayBuffer.isView(chunk)) return chunk.byteLength;
   return 0;
 }
@@ -76,6 +78,10 @@ function processOptions(options = {}) {
   return { ...options, detached: process.platform !== 'win32' };
 }
 
+/**
+ * @param {import('node:child_process').ChildProcess | null | undefined} child
+ * @param {NodeJS.Signals} [signal]
+ */
 function terminateChild(child, signal = 'SIGTERM') {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   try {
@@ -94,9 +100,14 @@ async function ensureDockerInternalNetwork() {
   return dockerInternalNetworkPromise;
 }
 
+/**
+ * @param {import('node:child_process').ChildProcess | null | undefined} child
+ * @param {number} [graceMs]
+ * @returns {Promise<void>}
+ */
 function terminateAndWait(child, graceMs = 2000) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-  return new Promise((resolve) => {
+  return /** @type {Promise<void>} */ (new Promise((resolve) => {
     let settled = false;
     const finish = () => {
       if (settled) return;
@@ -111,7 +122,7 @@ function terminateAndWait(child, graceMs = 2000) {
     const fallbackTimer = setTimeout(finish, graceMs + 3000);
     fallbackTimer.unref?.();
     terminateChild(child, 'SIGTERM');
-  });
+  }));
 }
 
 function realFileInside(root, absolute) {
@@ -216,13 +227,17 @@ function ipMatchesList(ip, entries = []) {
   return buildIpBlockList(entries).check(ip, version === 6 ? 'ipv6' : 'ipv4');
 }
 
+/**
+ * @param {any} row
+ * @returns {import('../types/site').Site | null}
+ */
 function hydrateSite(row) {
   if (!row) return null;
-  let headers = {};
-  let firewall = {};
-  let redirects = [];
-  let errorPages = {};
-  let cacheRules = [];
+  let headers;
+  let firewall;
+  let redirects;
+  let errorPages;
+  let cacheRules;
   try { headers = JSON.parse(row.headers_json || '{}'); } catch { headers = {}; }
   try { firewall = JSON.parse(row.firewall_json || '{}'); } catch { firewall = {}; }
   try { redirects = JSON.parse(row.redirects_json || '[]'); } catch { redirects = []; }
@@ -306,8 +321,14 @@ function hydrateSite(row) {
   };
 }
 
+/**
+ * @param {import('node:http').Server | import('node:https').Server} server
+ * @param {number} port
+ * @param {string} host
+ * @returns {Promise<void>}
+ */
 function listen(server, port, host) {
-  return new Promise((resolve, reject) => {
+  return /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
     const onError = (error) => {
       server.off('listening', onListening);
       reject(error);
@@ -319,11 +340,15 @@ function listen(server, port, host) {
     server.once('error', onError);
     server.once('listening', onListening);
     server.listen(port, host);
-  });
+  }));
 }
 
+/**
+ * @param {import('node:http').Server | import('node:https').Server | null | undefined} server
+ * @returns {Promise<void>}
+ */
 function closeServer(server) {
-  return new Promise((resolve) => {
+  return /** @type {Promise<void>} */ (new Promise((resolve) => {
     if (!server?.listening) return resolve();
     let settled = false;
     let forceTimer;
@@ -347,17 +372,18 @@ function closeServer(server) {
     } catch {
       finish();
     }
-  });
+  }));
 }
 
+/** @returns {Promise<number>} */
 function freePort() {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
     server.unref();
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => {
-      const port = server.address().port;
-      server.close(() => resolve(port));
+      const address = /** @type {import('node:net').AddressInfo} */ (server.address());
+      server.close(() => resolve(address.port));
     });
   });
 }

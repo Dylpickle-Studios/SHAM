@@ -5,33 +5,58 @@ const http = require('node:http');
 const { PROTOCOL_VERSION, PROTOCOL_HEADER, AUTH_HEADER, OPERATIONS, ERROR_CODES } = require('./protocol');
 const { RuntimeAgentError, RuntimeAgentUnavailableError } = require('./errors');
 
+/** @typedef {{ method: string, path: string, stream?: boolean }} AgentOperation */
+/** @typedef {Record<string, any>} AgentRequestBody */
+/**
+ * @typedef {Object} RuntimeAgentStatus
+ * @property {boolean} agentReachable
+ * @property {boolean} agentAuthenticated
+ * @property {boolean} dockerAvailable
+ * @property {boolean} [composeAvailable]
+ * @property {boolean} [buildpacksAvailable]
+ * @property {boolean} [nixpacksAvailable]
+ * @property {string} [reason]
+ * @property {string | null} checkedAt
+ */
+
 // Talks to the privileged Runtime Agent over a local Unix domain socket.
 // This is the only module in the control plane allowed to know that Docker
 // operations happen out-of-process; everything else calls these methods the
 // same way it used to call runTool(DOCKER_BIN, ...).
 class RuntimeClient {
+  /**
+   * @param {{ socketPath?: string, tokenPath?: string, requestTimeoutMs?: number }} [options]
+   */
   constructor({ socketPath, tokenPath, requestTimeoutMs = 120_000 } = {}) {
     this.socketPath = socketPath;
     this.tokenPath = tokenPath;
     this.requestTimeoutMs = requestTimeoutMs;
+    /** @type {string | null} */
     this.cachedToken = null;
+    /** @type {RuntimeAgentStatus} */
     this.lastStatus = { agentReachable: false, agentAuthenticated: false, dockerAvailable: false, checkedAt: null };
   }
 
+  /** @param {{ forceReload?: boolean }} [options] */
   loadToken({ forceReload = false } = {}) {
     if (this.cachedToken && !forceReload) return this.cachedToken;
     try {
-      const value = fs.readFileSync(this.tokenPath, 'utf8').trim();
+      const value = fs.readFileSync(/** @type {string} */ (this.tokenPath), 'utf8').trim();
       if (!value) throw new Error('empty token file');
       this.cachedToken = value;
       return value;
     } catch (error) {
-      throw new RuntimeAgentUnavailableError(`agent token is not available (${error.code || error.message})`);
+      const detail = /** @type {NodeJS.ErrnoException} */ (error);
+      throw new RuntimeAgentUnavailableError(`agent token is not available (${detail.code || detail.message})`);
     }
   }
 
-  // Low-level request. Returns { statusCode, headers, body } for non-stream
-  // calls, or a readable-stream-like emitter for stream: true operations.
+  /**
+   * Low-level request. Returns { statusCode, headers, body } for non-stream
+   * calls, or a readable-stream-like emitter for stream: true operations.
+   * @param {AgentOperation} operation
+   * @param {{ body?: AgentRequestBody | null, stream?: boolean, retriedAuth?: boolean }} [options]
+   */
   request(operation, { body = null, stream = false, retriedAuth = false } = {}) {
     if (!this.socketPath) return Promise.reject(new RuntimeAgentUnavailableError('SHAM_RUNTIME_AGENT_SOCKET is not configured'));
     let token;
@@ -59,7 +84,8 @@ class RuntimeClient {
         // A streaming operation only actually streams once the agent has
         // committed to a 2xx response; validation/ownership failures still
         // arrive as a plain JSON error body (see runtime-agent/server.js).
-        if (stream && res.statusCode >= 200 && res.statusCode < 300) return resolve(this._readNdjsonStream(res));
+        const statusCode = res.statusCode || 0;
+        if (stream && statusCode >= 200 && statusCode < 300) return resolve(this._readNdjsonStream(res));
         const chunks = [];
         let bytes = 0;
         res.on('data', (chunk) => { bytes += chunk.length; if (bytes <= 8 * 1024 * 1024) chunks.push(chunk); });
@@ -67,8 +93,8 @@ class RuntimeClient {
           const raw = Buffer.concat(chunks).toString('utf8');
           let parsed = null;
           try { parsed = raw ? JSON.parse(raw) : null; } catch { /* non-JSON error body */ }
-          if (res.statusCode >= 200 && res.statusCode < 300) return resolve(parsed);
-          reject(this._translateErrorBody(res.statusCode, parsed, raw));
+          if (statusCode >= 200 && statusCode < 300) return resolve(parsed);
+          reject(this._translateErrorBody(statusCode, parsed, raw));
         });
         res.once('error', (error) => reject(new RuntimeAgentUnavailableError(error.message)));
       });
@@ -97,6 +123,7 @@ class RuntimeClient {
     let buffer = '';
     const lines = [];
     let finished = false;
+    /** @type {InstanceType<typeof RuntimeAgentUnavailableError> | null} */
     let finalError = null;
     const waiters = [];
     const push = (line) => {
@@ -135,6 +162,7 @@ class RuntimeClient {
   async _consumeStream(operation, body, onLine) {
     const stream = await this.request(operation, { body, stream: true });
     let result = null;
+    /** @type {InstanceType<typeof RuntimeAgentError> | null} */
     let opError = null;
     for await (const line of stream) {
       if (line.type === 'log' && onLine) onLine(line.level || 'info', line.line);
@@ -236,6 +264,7 @@ class RuntimeClient {
   cleanupManagedImages() { return this.request(OPERATIONS.CLEANUP_MANAGED_IMAGES); }
 }
 
+/** @type {RuntimeClient | null} */
 let sharedClient = null;
 function getRuntimeClient() {
   if (sharedClient) return sharedClient;

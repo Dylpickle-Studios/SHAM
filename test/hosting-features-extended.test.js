@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const { root, source } = require('./source-tree');
+const { source } = require('./source-tree');
 
 const { validateSiteInput } = require('../src/validation');
 const { validatePluginArchiveFile } = require('../src/plugin-archive');

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    // SHAM stays plain CommonJS JavaScript. TypeScript is used purely as a
+    // static analyzer over JSDoc-annotated .js files (`tsc --noEmit`) — it
+    // never compiles or emits anything, and nothing here changes how the
+    // app actually runs.
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "node16",
+    "moduleResolution": "node16",
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // strictNullChecks is the single highest-value check for this codebase
+    // (see docs/development.md) — it catches real "value may be null/
+    // undefined" bugs on annotated code. noImplicitAny stays off: most of
+    // this ~16k line backend has no JSDoc yet, and turning it on today would
+    // flag nearly every function rather than the ones that matter. Add
+    // JSDoc to a module and both checks start protecting it.
+    "strict": false,
+    "strictNullChecks": true,
+    "noImplicitAny": false,
+    "noImplicitThis": true,
+    // Off deliberately, not by omission: SHAM has several hundred existing
+    // `catch (error) { ...error.message... }` blocks. Turning this on makes
+    // every one of them a type error until each is rewritten with an
+    // `instanceof Error` narrowing, which is exactly the kind of mechanical,
+    // low-value bulk edit this task's own guidance says to avoid ("Do not
+    // mechanically alter every catch block unless needed"). New/touched
+    // code should still prefer `error instanceof Error ? error.message :
+    // String(error)` where the caught value is genuinely untrusted.
+    "useUnknownInCatchVariables": false,
+
+    // node_modules' own .d.ts files (including ones this project does not
+    // control the quality of) are not what this config is meant to police.
+    "skipLibCheck": true,
+
+    "types": ["node"]
+  },
+  // Staged rollout (see docs/development.md): the control plane, CLI, and
+  // runtime agent are checked first since they are where domain types
+  // (Site, Deployment, Runtime, ...) and nullability actually matter most.
+  // test/ and public/ are not included yet — public/js is classic,
+  // cross-file-global-scope browser script (see eslint.config.js for the
+  // same limitation from ESLint's side) and would need a shared ambient
+  // .d.ts before checkJs is useful there rather than noisy; test/ can be
+  // added once the backend itself is clean.
+  "include": [
+    "src/**/*.js",
+    "bin/**/*.js",
+    "runtime-agent/**/*.js",
+    "scripts/**/*.js"
+  ],
+  "exclude": [
+    "node_modules",
+    "data",
+    "sham-data",
+    "coverage",
+    "public",
+    "test",
+    "examples"
+  ]
+  // Note: a small number of files not yet clean (src/server.js,
+  // src/sites/{runtime,core,delivery}.js, src/security.js,
+  // src/cloudflare-tunnel*.js, src/routes/sites.js,
+  // src/operations/{deployments,shared}.js, src/plugin-manager.js,
+  // src/git-providers.js, src/backup-restore.js,
+  // src/performance-monitor.js, src/edge-proxy.js, src/bootstrap.js,
+  // src/integrations.js, src/file-utils.js, src/dependency-scanner.js) carry
+  // a per-file `// @ts-nocheck` with a comment explaining why, instead of an
+  // `exclude` entry here — `exclude` only controls root-file discovery, and
+  // several of these are still pulled into the program transitively (e.g.
+  // runtime-agent/docker.js requires src/sites/runtime.js), so `exclude`
+  // alone does not stop tsc from reporting on them. See docs/development.md.
+}

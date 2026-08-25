@@ -127,8 +127,11 @@ function parseSimpleYaml(text) {
     const indent = line.length - line.trimStart().length;
     const match = /^\s*([A-Za-z0-9_.-]+)\s*:\s*(.*)$/.exec(line);
     if (!match) throw new Error(`sham.yaml line ${index + 1} is outside the supported mapping subset.`);
-    while (stack.length > 1 && indent <= stack.at(-1).indent) stack.pop();
-    const parent = stack.at(-1).value;
+    // `stack` always has at least its root entry (pushed before this loop
+    // starts and never fully popped, since the loop condition requires
+    // stack.length > 1 to pop), so .at(-1) is never undefined here.
+    while (stack.length > 1 && indent <= /** @type {{indent: number}} */ (stack.at(-1)).indent) stack.pop();
+    const parent = /** @type {{value: Record<string, any>}} */ (stack.at(-1)).value;
     if (Object.prototype.hasOwnProperty.call(parent, match[1])) throw new Error(`sham.yaml line ${index + 1} repeats key ${match[1]}.`);
     if (!match[2]) {
       parent[match[1]] = {};

@@ -336,11 +336,13 @@ git status --short
 
 ```bash
 npm ci
-npm run check
+npm run check       # syntax + ESLint + tsc --noEmit (JSDoc type checking)
 npm test
 npm run release:check
 npm run dev
 ```
+
+`npm run check` runs `check:syntax`, `lint`, and `typecheck` together. SHAM stays a plain JavaScript/CommonJS project — TypeScript is used only as a static analyzer over JSDoc comments (`allowJs`/`checkJs`/`noEmit`), never as a compiler. See [Development workflow](docs/development.md) for details, including which files are still being brought under type checking.
 
 `npm run dev` uses Node's watch mode. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [RELEASING.md](RELEASING.md) before submitting or publishing changes.
 

@@ -36,16 +36,20 @@ class SnapshotManager {
     else this.active = Math.max(0, this.active - 1);
   }
 
+  /** @param {Record<string, any>} data @returns {Promise<void>} */
   worker(data) {
-    return new Promise((resolve, reject) => {
+    return /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
+      /** @type {import('node:worker_threads').Worker} */
       let worker;
       try { worker = new Worker(path.join(__dirname, 'snapshot-worker.js'), { workerData: data }); }
       catch (error) { reject(error); return; }
       this.workers.add(worker);
+      /** @type {{ ok: boolean, error?: string } | null} */
       let message = null;
+      /** @type {Error | null} */
       let failure = null;
       worker.once('message', (value) => { message = value; });
-      worker.once('error', (error) => { failure = error; });
+      worker.once('error', (/** @type {Error} */ error) => { failure = error; });
       worker.once('exit', (code) => {
         this.workers.delete(worker);
         if (failure) reject(failure);
@@ -53,7 +57,7 @@ class SnapshotManager {
         else if (!message?.ok) reject(new Error(message?.error || 'Snapshot worker failed.'));
         else resolve();
       });
-    });
+    }));
   }
 
   list(siteId) {

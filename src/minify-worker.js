@@ -1,6 +1,12 @@
 const { parentPort, workerData } = require('node:worker_threads');
+if (!parentPort) throw new Error('This module must run inside a worker thread.');
+const port = /** @type {import('node:worker_threads').MessagePort} */ (parentPort);
 const CleanCSS = require('clean-css');
 const { minify: minifyHtml } = require('html-minifier-terser');
+// terser ships only ESM type declarations; this CJS require() still works
+// at runtime (terser also publishes a CJS entry point), it just doesn't
+// type-check cleanly against a `module: node16`+`require` combination.
+// @ts-expect-error TS1479 -- see comment above.
 const { minify: minifyJs } = require('terser');
 
 function javascriptOptions({ minify, obfuscate, module = false }) {
@@ -63,5 +69,5 @@ async function transform({ source, extension, minify, obfuscate }) {
 }
 
 transform(workerData)
-  .then((output) => parentPort.postMessage({ ok: true, output }))
-  .catch((error) => parentPort.postMessage({ ok: false, error: error.message }));
+  .then((output) => port.postMessage({ ok: true, output }))
+  .catch((error) => port.postMessage({ ok: false, error: error.message }));

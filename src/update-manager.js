@@ -110,7 +110,7 @@ async function removeStagedRoot(stagedRoot) {
 }
 
 async function pruneApplicationReleases(activeState, keep = 4) {
-  let entries = [];
+  let entries;
   try { entries = await fs.promises.readdir(APP_RELEASES_DIR, { withFileTypes: true }); }
   catch { return; }
   const releaseRoots = new Set(entries.filter((entry) => entry.isDirectory()).map((entry) => path.resolve(path.join(APP_RELEASES_DIR, entry.name))));

@@ -1,9 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 
-const { root, source: read } = require('./source-tree');
+const { source: read } = require('./source-tree');
 
 test('compressed response cache counts variants and deduplicates first-hit work', () => {
   const source = read('src/site-manager.js');

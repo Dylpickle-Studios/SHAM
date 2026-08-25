@@ -46,7 +46,7 @@ $('.theme-mode-toggle').addEventListener('keydown', (event) => {
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
   const buttons = $$('.theme-mode-option');
   const current = Math.max(0, buttons.indexOf(document.activeElement));
-  let next = current;
+  let next;
   if (event.key === 'Home') next = 0;
   else if (event.key === 'End') next = buttons.length - 1;
   else next = (current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
@@ -67,7 +67,7 @@ $('.theme-presets').addEventListener('keydown', (event) => {
   if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
   const buttons = $$('.theme-preset');
   const current = Math.max(0, buttons.indexOf(document.activeElement));
-  let next = current;
+  let next;
   if (event.key === 'Home') next = 0;
   else if (event.key === 'End') next = buttons.length - 1;
   else next = (current + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1) + buttons.length) % buttons.length;

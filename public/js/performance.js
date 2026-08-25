@@ -132,7 +132,6 @@ function renderSiteHistory(history) {
 }
 
 function formatRuleThreshold(rule) {
-  const meta = PERFORMANCE_RULE_KINDS[rule.kind] || PERFORMANCE_RULE_KINDS.cpu_percent;
   const value = Number(rule.threshold || 0);
   if (rule.kind === 'traffic_multiplier') return `${value.toFixed(1)}× baseline`;
   if (rule.kind === 'request_rate') return `${value.toFixed(1)} req/s`;

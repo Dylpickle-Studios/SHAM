@@ -584,20 +584,20 @@ function commandItems() {
       ['Instance', 'Git providers, backups and observability', 'instance'],
       ['Administration', 'Accounts, Cloudflare, Certbot and OIDC', 'administration']
     ];
-    for (const [label, hint, tab] of settings) items.push({
+    for (const [label, hint, tab] of settings) {items.push({
       label: `Settings: ${label}`, hint, keywords: `settings operations ${label.toLowerCase()} ${hint.toLowerCase()}`,
       run: () => { showSection('operations'); setOperationsTab(tab); }
-    });
+    });}
   }
   const docs = [
     ['Getting started', 'usage'], ['Dashboard & UI', 'dashboard'], ['Runtimes & Docker', 'runtimes'],
     ['Git & CI/CD', 'git'], ['API & CLI', 'api'], ['Configuration', 'config'],
     ['Operations & Security', 'operations'], ['Plugin development', 'development'], ['Troubleshooting', 'troubleshooting']
   ];
-  for (const [label, tabName] of docs) items.push({
+  for (const [label, tabName] of docs) {items.push({
     label: `Docs: ${label}`, hint: 'Documentation', keywords: `help guide ${label.toLowerCase()}`,
     run: () => { showSection('documentation'); const tab = $(`[data-doc-tab="${tabName}"]`); if (tab && typeof selectDocumentationTab === 'function') selectDocumentationTab(tab); }
-  });
+  });}
   for (const site of state.sites) {
     const url = siteDisplayUrl(site);
     items.push({ label: `Open ${site.name}`, hint: url, keywords: `${site.name} ${url} website site settings`, run: () => openSiteWorkspace(site) });

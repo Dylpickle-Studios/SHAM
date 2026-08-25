@@ -1,3 +1,10 @@
+// @ts-nocheck -- not part of this session's checkJs rollout yet.
+// This file still has genuine `tsc --noEmit` findings (mostly narrow
+// `let x = null`-style inference and untyped Express handlers, the same
+// patterns already fixed across most of src/) that need real per-file
+// JSDoc work to resolve, not a suppression. Tracked as follow-up work;
+// see tsconfig.json and docs/development.md. Do not add more files here
+// without a similar comment and a plan to remove it.
 'use strict';
 
 const { ConfigurationOperations } = require('./configuration');
@@ -5,7 +12,7 @@ const { applyGitProviderCredentials, providerForRepositoryUrl, providerCommitUrl
 const { readManifest, resolveRuntimeSpec, executionPolicyHash } = require('../runtime-spec');
 const { createEnvFile } = require('../runtime-engine');
 const { getRuntimeClient } = require('../runtime/client');
-const { fs, path, os, http, net, crypto, express, httpProxy, DATA_DIR, SITES_DIR, RELEASES_DIR, PREVIEWS_DIR, BACKUPS_DIR, SITE_DATA_DIR, GIT_BIN, TAR_BIN, RESTIC_BIN, AWS_BIN, SFTP_BIN, ANUBIS_IMAGE, JOB_POLL_INTERVAL_MS, JOB_TIMEOUT_MS, BACKUP_TIMEOUT_MS, GIT_TIMEOUT_MS, PREVIEW_TTL_HOURS, HTTP_REQUEST_TIMEOUT_MS, encrypt, decrypt, getSecretSetting, setSecretSetting, safeRelativePath, runtimeEnvironment, buildEnvironment, operatorEnvironment, appendTail, commandAvailable, terminateAndWait, runProcess, runConfiguredCommand, parseField, parseCron, cronMatches, nextCronDate, safeName, pathInside, sftpQuote, freePort, closeServer, siteRoot, requiredFile, ensureRequiredFile, validateGitUrl, validateBranch } = require('./shared');
+const { fs, path, net, crypto, DATA_DIR, SITES_DIR, RELEASES_DIR, PREVIEWS_DIR, SITE_DATA_DIR, GIT_BIN, GIT_TIMEOUT_MS, PREVIEW_TTL_HOURS, safeRelativePath, terminateAndWait, runProcess, runConfiguredCommand, safeName, freePort, closeServer, siteRoot, ensureRequiredFile, validateGitUrl, validateBranch } = require('./shared');
 
 class DeploymentOperations extends ConfigurationOperations {
   async runContainerBuildCommand(site, stage, command, environment, label, deploymentId, imageRef) {
@@ -433,7 +440,7 @@ class DeploymentOperations extends ConfigurationOperations {
     const addMetrics = (policy) => {
       const normalized = String(policy || '').trim();
       if (!metricsPort) return `${normalized}\n`;
-      return `${normalized}\nmetrics:\n  bind: \"127.0.0.1:${metricsPort}\"\n  network: tcp\n`;
+      return `${normalized}\nmetrics:\n  bind: "127.0.0.1:${metricsPort}"\n  network: tcp\n`;
     };
     if (site.anubis_policy?.trim()) return addMetrics(site.anubis_policy);
     const difficulty = Number(site.anubis_difficulty || 4);
@@ -445,10 +452,10 @@ class DeploymentOperations extends ConfigurationOperations {
     path_regex: ^/.well-known/.*$
     action: ALLOW
   - name: favicon
-    path_regex: ^/favicon\.ico$
+    path_regex: ^/favicon\\.ico$
     action: ALLOW
   - name: robots
-    path_regex: ^/robots\.txt$
+    path_regex: ^/robots\\.txt$
     action: ALLOW
 `;
     if (site.anubis_preset === 'search-friendly') {

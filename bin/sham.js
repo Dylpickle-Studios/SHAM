@@ -7,7 +7,9 @@ function usage(exitCode = 0) {
   process.exitCode = exitCode;
 }
 
+/** @param {string[]} argv */
 function options(argv) {
+  /** @type {{ _: string[], [key: string]: any }} */
   const out = { _: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const item = argv[i];
@@ -19,6 +21,10 @@ function options(argv) {
   return out;
 }
 
+/**
+ * @param {string} path
+ * @param {{ method?: string, body?: Record<string, any>, timeoutMs?: number }} [options]
+ */
 async function api(path, { method = 'GET', body = undefined, timeoutMs = 30_000 } = {}) {
   const base = String(process.env.SHAM_URL || '').replace(/\/+$/, '');
   const token = String(process.env.SHAM_TOKEN || '');
@@ -32,10 +38,10 @@ async function api(path, { method = 'GET', body = undefined, timeoutMs = 30_000 
     signal: AbortSignal.timeout(timeoutMs)
   });
   const text = await response.text();
-  let payload = null;
+  let payload;
   try { payload = text ? JSON.parse(text) : {}; } catch { payload = { raw: text }; }
   if (!response.ok) {
-    const error = new Error(payload?.error || `SHAM returned HTTP ${response.status}.`);
+    const error = /** @type {Error & { payload?: unknown, status?: number }} */ (new Error(payload?.error || `SHAM returned HTTP ${response.status}.`));
     error.payload = payload; error.status = response.status; throw error;
   }
   return payload;

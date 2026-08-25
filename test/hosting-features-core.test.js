@@ -46,7 +46,7 @@ test('site input supports obfuscation, domain-only access, and firewall settings
 
 test('domain-only access requires a configured domain and firewall lists are validated', () => {
   assert.throws(() => validateSiteInput({ name: 'No domain', port: 4301, domainOnly: true }), /Configure a domain/);
-  assert.throws(() => validateSiteInput({ name: 'Bad CIDR', port: 4302, firewallBlockedIps: '198.51.100.0\/99' }), /invalid CIDR prefix/);
+  assert.throws(() => validateSiteInput({ name: 'Bad CIDR', port: 4302, firewallBlockedIps: '198.51.100.0/99' }), /invalid CIDR prefix/);
   assert.throws(() => validateSiteInput({ name: 'Bad country', port: 4303, firewallBlockedCountries: 'NLD' }), /two-letter country codes/);
   assert.throws(() => validateSiteInput({ name: 'Untrusted country', port: 4304, firewallEnabled: true, firewallMode: 'local', firewallAllowedCountries: 'NL' }), /require a synchronized Cloudflare proxy/);
   assert.deepEqual(validateSiteInput({ name: 'Tor rule', port: 4305, firewallBlockedCountries: 'T1' }).firewall.blockedCountries, ['T1']);

@@ -192,7 +192,9 @@ function pumpUploadWorkers() {
       continue;
     }
     activeWorkers.add(worker);
+    /** @type {{ ok: boolean, error?: string } | null} */
     let result = null;
+    /** @type {Error | null} */
     let workerError = null;
     const finish = () => {
       activeWorkers.delete(worker);
@@ -236,11 +238,14 @@ async function stopUploadWorkers() {
 }
 
 if (!isMainThread && workerData?.task === 'install-upload') {
+  // Guaranteed non-null: worker_threads always sets parentPort for a
+  // non-main thread, and this branch only runs when !isMainThread.
+  const port = /** @type {import('node:worker_threads').MessagePort} */ (parentPort);
   try {
     installUpload(workerData.options);
-    parentPort.postMessage({ ok: true });
+    port.postMessage({ ok: true });
   } catch (error) {
-    parentPort.postMessage({ ok: false, error: error.message });
+    port.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) });
   }
 }
 
