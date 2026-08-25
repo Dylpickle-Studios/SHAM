@@ -22,6 +22,7 @@ This manual documents the current SHAM 1.1.1 feature set. The root [README](../R
 - [API and CLI](api-and-cli.md) — token authentication, scopes, CLI commands, CI examples, errors, timeouts, and compatibility policy.
 - [API reference](api-reference.md) — endpoint inventory grouped by public, authenticated, administrator, site, operations, security, and plugin APIs.
 - [Configuration reference](configuration-reference.md) — `.env` variables, optional executables, Docker networks, persistent paths, and production configuration notes.
+- [Integration and browser testing](integration-testing.md) — isolated deployment lifecycle, Docker Compose, and Chromium CI suites.
 
 ### Extend SHAM
 
