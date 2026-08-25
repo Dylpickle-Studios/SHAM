@@ -45,6 +45,7 @@ for (const [forbidden, message] of [
   ['data/sham.db-wal', 'The SQLite WAL file must not be included in the source tree.'],
   ['data/sham.db-shm', 'The SQLite shared-memory file must not be included in the source tree.'],
   ['data/master-key.json', 'The encrypted-secret master key must not be included in the source tree.'],
+  ['data/runtime-agent', 'The generated runtime agent token/socket directory must not be included in the source tree.'],
   ['sham-data', 'The Docker runtime-data directory must not be included in the source tree.']
 ]) requireCondition(!exists(forbidden), message);
 

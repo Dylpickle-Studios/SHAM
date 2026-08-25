@@ -108,7 +108,7 @@ Prefer external/container secret injection for production credentials.
 |---|---|---|
 | `SHAM_CERTBOT_BIN` | `certbot` | Certificate issuance/renewal. |
 | `SHAM_CLOUDFLARED_BIN` | `cloudflared` | Cloudflare Tunnels. |
-| `SHAM_DOCKER_BIN` | `docker` | Containers, Dockerfile builds, Compose, Docker isolation, Anubis. |
+| `SHAM_DOCKER_BIN` | `docker` | Runtime Agent only: containers, Dockerfile builds, Compose, Docker isolation, Anubis. |
 | `SHAM_PACK_BIN` | `pack` | Cloud Native Buildpacks. |
 | `SHAM_NIXPACKS_BIN` | `nixpacks` | Nixpacks source-to-image builds. |
 | `SHAM_GIT_BIN` | `git` | Git deployments. |
@@ -127,7 +127,17 @@ SHAM reports optional runtime/build capabilities in the Operations/Instance area
 | `SHAM_DOCKER_INTERNAL_NETWORK` | `sham-runtime-internal` | Shared internal/no-egress runtime network. |
 | `SHAM_DOCKER_EGRESS_NETWORK` | `sham-runtime-egress` | Shared egress-capable runtime network. |
 
-The supplied isolation Compose overlay configures Docker access/network plumbing. The base Compose file deliberately does not mount the Docker socket.
+The supplied isolation Compose overlay configures Docker access/network plumbing. The base Compose file deliberately does not mount the Docker socket, and with the Runtime Agent split the `sham` service never mounts it even under the isolation overlay — only `sham-runtime-agent` does. `SHAM_DOCKER_HOST_DATA_PATH` must be set on the agent service, not on `sham`.
+
+## Runtime Agent (control plane → agent RPC)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SHAM_RUNTIME_AGENT_SOCKET` | `<SHAM_DATA_PATH>/runtime-agent/agent.sock` | Unix socket the control plane connects to and the agent listens on. Must resolve to the same path inside both containers (the shared `/data` volume makes this automatic). |
+| `SHAM_RUNTIME_AGENT_TOKEN_PATH` | `<SHAM_DATA_PATH>/runtime-agent/agent.token` | Shared authentication token file. Generated automatically by the agent on first start (mode `0600`); never log or expose its contents. |
+| `SHAM_RUNTIME_AGENT_TIMEOUT_SECONDS` | `120` | Control-plane request timeout when calling the agent (build/Compose operations can legitimately take a while). |
+
+These apply to both the control plane and the agent process — set them identically on both (or leave them at their defaults, since both default from the same `SHAM_DATA_PATH`). See [Runtimes and Docker](runtimes-and-docker.md#runtime-agent-architecture) for the architecture and [Troubleshooting](troubleshooting.md#runtime-agent) for failure modes.
 
 ## Automation and long-running operations
 

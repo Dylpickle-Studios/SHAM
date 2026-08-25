@@ -205,6 +205,11 @@ module.exports = {
   NIXPACKS_BIN: process.env.SHAM_NIXPACKS_BIN || 'nixpacks',
   DOCKER_INTERNAL_NETWORK: process.env.SHAM_DOCKER_INTERNAL_NETWORK || 'sham-internal',
   DOCKER_EGRESS_NETWORK: process.env.SHAM_DOCKER_EGRESS_NETWORK || '',
+  // The Runtime Agent owns the Docker socket; the control plane only ever
+  // talks to it over this local Unix socket with a shared, generated token.
+  RUNTIME_AGENT_SOCKET_PATH: process.env.SHAM_RUNTIME_AGENT_SOCKET || path.join(DATA_DIR, 'runtime-agent', 'agent.sock'),
+  RUNTIME_AGENT_TOKEN_PATH: process.env.SHAM_RUNTIME_AGENT_TOKEN_PATH || path.join(DATA_DIR, 'runtime-agent', 'agent.token'),
+  RUNTIME_AGENT_REQUEST_TIMEOUT_MS: integerEnv('SHAM_RUNTIME_AGENT_TIMEOUT_SECONDS', 120, 5, 3600) * 1000,
   GIT_BIN: process.env.SHAM_GIT_BIN || 'git',
   TAR_BIN: process.env.SHAM_TAR_BIN || 'tar',
   RESTIC_BIN: process.env.SHAM_RESTIC_BIN || 'restic',

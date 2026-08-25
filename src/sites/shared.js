@@ -88,20 +88,9 @@ function terminateChild(child, signal = 'SIGTERM') {
 
 async function ensureDockerInternalNetwork() {
   if (dockerInternalNetworkPromise) return dockerInternalNetworkPromise;
-  dockerInternalNetworkPromise = (async () => {
-    try {
-      await execFileAsync(DOCKER_BIN, ['network', 'inspect', DOCKER_INTERNAL_NETWORK], { timeout: 15_000, windowsHide: true, env: operatorEnvironment() });
-      return DOCKER_INTERNAL_NETWORK;
-    } catch {
-      try {
-        await execFileAsync(DOCKER_BIN, ['network', 'create', '--driver', 'bridge', '--internal', '--label', 'sham.managed=true', DOCKER_INTERNAL_NETWORK], { timeout: 30_000, windowsHide: true, env: operatorEnvironment() });
-      } catch (error) {
-        try { await execFileAsync(DOCKER_BIN, ['network', 'inspect', DOCKER_INTERNAL_NETWORK], { timeout: 15_000, windowsHide: true, env: operatorEnvironment() }); }
-        catch { throw new Error(`Could not create the isolated Docker network: ${error.message}`); }
-      }
-      return DOCKER_INTERNAL_NETWORK;
-    }
-  })().catch((error) => { dockerInternalNetworkPromise = null; throw error; });
+  dockerInternalNetworkPromise = getRuntimeClient().ensureNetwork({ name: DOCKER_INTERNAL_NETWORK, internal: true })
+    .then(() => DOCKER_INTERNAL_NETWORK)
+    .catch((error) => { dockerInternalNetworkPromise = null; throw error; });
   return dockerInternalNetworkPromise;
 }
 

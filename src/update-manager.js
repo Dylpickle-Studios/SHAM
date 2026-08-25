@@ -12,7 +12,7 @@ const {
 const PENDING_PATH = path.join(UPDATES_DIR, 'pending-update.json');
 const STATE_PATH = path.join(UPDATES_DIR, 'update-state.json');
 const MAX_UPDATE_BYTES = 512 * 1024 * 1024;
-const MANAGED_PATHS = ['src', 'public', 'bin', 'docs', 'examples', 'test', 'scripts', '.github', 'README.md', 'AUDIT-REPORT.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'RELEASING.md', 'SECURITY.md', 'Dockerfile', 'docker-compose.yml', 'docker-compose.isolation.yml', '.dockerignore', '.env.example', '.gitattributes', '.gitignore', 'LICENSE', 'package.json', 'package-lock.json'];
+const MANAGED_PATHS = ['src', 'public', 'bin', 'runtime-agent', 'docs', 'examples', 'test', 'scripts', '.github', 'README.md', 'AUDIT-REPORT.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'RELEASING.md', 'SECURITY.md', 'Dockerfile', 'docker-compose.yml', 'docker-compose.isolation.yml', '.dockerignore', '.env.example', '.gitattributes', '.gitignore', 'LICENSE', 'package.json', 'package-lock.json'];
 
 function safeEntry(name) {
   const normalized = String(name || '').replaceAll('\\', '/');

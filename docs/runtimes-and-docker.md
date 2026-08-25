@@ -221,21 +221,41 @@ The YAML parser intentionally supports a small mapping/scalar subset. Unsupporte
 
 Execution-relevant policy is hashed. A changed/removed manifest policy requires explicit approval before a Git deployment may activate it.
 
+## Runtime Agent architecture
+
+SHAM's web/API/dashboard process (the **control plane**) never touches the Docker socket directly. All Docker/Compose/buildpack/nixpacks execution happens in a separate, privileged **SHAM Runtime Agent** process:
+
+```text
+Internet
+   |
+SHAM Control Plane / Dashboard / API
+   |  authenticated, narrowly scoped local RPC (Unix socket)
+   v
+SHAM Runtime Agent
+   |
+   v
+Docker socket / Docker daemon
+```
+
+This exists because the control plane is the internet-facing process (dashboard, deployment webhooks, uploads). If it were compromised while holding `/var/run/docker.sock`, an attacker would have effectively unrestricted host access. Moving that socket to a separate agent process means a control-plane compromise no longer implies direct Docker/root-level host access — the attacker is left with whatever the agent's narrow RPC surface allows (create/stop/remove SHAM-labeled containers, build SHAM-tagged images, and similar scoped operations), not arbitrary Docker or shell commands. Mounting the socket into the agent still grants substantial host authority; the agent is a privileged component and should be operated with the same care Docker socket access has always required.
+
+The agent exposes a small allowlisted set of typed operations (container run/stop/remove/port/logs/exec, image build/remove, network ensure/connect, Compose config/up/ps/port/down/exec, and SHAM-owned resource cleanup) over a local, token-authenticated Unix domain socket — never a generic `docker`/shell passthrough. Requests are authenticated with a randomly generated shared token (`SHAM_RUNTIME_AGENT_TOKEN_PATH`, mode `0600`), and mutating operations require the target container/Compose project to carry SHAM's own `sham.managed=true` (or `com.docker.compose.project=sham-...`) labels — the agent refuses to touch containers it did not create, even if the control plane asks it to.
+
+When the agent is unavailable (not started, wrong token, Docker daemon down), Docker-dependent features fail with a clear "Docker runtime unavailable" message instead of hanging; everything else in SHAM (static sites, process runtimes, Git, TLS, dashboard) keeps working normally. Capability flags (`GET /api/admin/operations` → `capabilities.agentReachable`/`agentAuthenticated`/`dockerAvailable`) report agent reachability, authentication status, and Docker daemon reachability without exposing the token or any host paths.
+
 ## Docker-host path mapping
 
-When SHAM itself runs in Docker but controls the host Docker daemon, the host daemon cannot see container-internal `/data/...` paths automatically.
-
-Set:
+The Runtime Agent — not the control plane — is the process that ever calls `docker run -v ...`, so it is the one that needs a host-visible path for bind mounts (the daemon resolves `-v` sources on the host, regardless of which container's CLI issued the command). When the agent itself runs in a container:
 
 ```bash
 SHAM_DOCKER_HOST_DATA_PATH=/absolute/host/path/to/sham-data
 ```
 
-so SHAM can translate release/build paths into host-visible paths for Docker mounts/build contexts.
+must be set **on the `sham-runtime-agent` service**, so it can translate release/build paths into host-visible paths for Docker mounts. The `sham` control-plane service no longer needs this variable at all.
 
 ## Docker isolation overlay
 
-The base `docker-compose.yml` intentionally avoids the Docker socket. Use the isolation overlay only when you need daemon-managed application features:
+The base `docker-compose.yml` intentionally avoids the Docker socket entirely — that remains true, and now applies permanently to the `sham` service itself, not just to the base compose file. Use the isolation overlay only when you need daemon-managed application features (Docker/Compose runtimes, image builds, Anubis); it now starts a second `sham-runtime-agent` container that owns the socket instead of adding it to `sham`:
 
 ```bash
 export SHAM_DOCKER_HOST_DATA_PATH="$(pwd)/sham-data"
@@ -244,7 +264,19 @@ export DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)"
 docker compose -f docker-compose.yml -f docker-compose.isolation.yml up -d --build
 ```
 
-Docker daemon access is effectively host-administration access. Do not treat a single Docker daemon as a hostile multi-tenant sandbox.
+`sham` and `sham-runtime-agent` communicate over a Unix socket created under the `/data` volume they both already mount — no extra port or network is published for the agent, and it does not join SHAM's public-facing network.
+
+Docker daemon access is effectively host-administration access. Do not treat a single Docker daemon as a hostile multi-tenant sandbox, and run the Runtime Agent only on a host/VM you trust with that authority.
+
+### Migrating an existing installation
+
+If you previously ran the isolation overlay with the Docker socket mounted directly into the `sham` service:
+
+1. Pull/build the updated image (it now includes `runtime-agent/`).
+2. Replace your `docker-compose.isolation.yml` with the current version (it now defines `sham-runtime-agent`).
+3. Keep `SHAM_DOCKER_HOST_DATA_PATH` and `DOCKER_GID` exported the same way as before — they now apply to the agent service.
+4. Run `docker compose -f docker-compose.yml -f docker-compose.isolation.yml up -d --build`. Compose will recreate `sham` without the socket and start `sham-runtime-agent` alongside it.
+5. No database, site, or release data changes are required. Running sites will restart their runtime instances once, since the exit-detection process (`docker wait`) is now supplied by the agent instead of the control plane.
 
 ## Reliability checklist
 

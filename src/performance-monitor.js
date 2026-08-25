@@ -1,12 +1,9 @@
 const fs = require('node:fs');
 const os = require('node:os');
-const { execFile } = require('node:child_process');
-const { promisify } = require('node:util');
 const { monitorEventLoopDelay } = require('node:perf_hooks');
-const { DATA_DIR, PERFORMANCE_INTERVAL_MS, PERFORMANCE_HISTORY_SAMPLES, PERFORMANCE_SITE_CONCURRENCY, DOCKER_BIN } = require('./config');
-const { operatorEnvironment } = require('./process-env');
-const execFileAsync = promisify(execFile);
+const { DATA_DIR, PERFORMANCE_INTERVAL_MS, PERFORMANCE_HISTORY_SAMPLES, PERFORMANCE_SITE_CONCURRENCY } = require('./config');
 const { uploadQueueStats } = require('./upload-utils');
+const { getRuntimeClient } = require('./runtime/client');
 
 function safeNumber(value, fallback = 0) {
   const number = Number(value);
@@ -50,10 +47,9 @@ async function processUsage(pid, previousTicks, elapsedSeconds) {
 async function dockerUsage(containerId) {
   if (!containerId) return { memory: null, cpuPercent: 0 };
   try {
-    const { stdout } = await execFileAsync(DOCKER_BIN, ['stats', '--no-stream', '--format', '{{json .}}', String(containerId)], { timeout: 5000, env: operatorEnvironment(), maxBuffer: 1024 * 1024 });
-    const row = JSON.parse(String(stdout || '').trim().split(/\r?\n/)[0] || '{}');
-    const cpuPercent = safeNumber(String(row.CPUPerc || row.CPU || '0').replace('%', ''));
-    const memoryText = String(row.MemUsage || row.Mem || '').split('/')[0].trim();
+    const row = await getRuntimeClient().containerStats({ id: String(containerId) });
+    const cpuPercent = safeNumber(String(row?.CPUPerc || row?.CPU || '0').replace('%', ''));
+    const memoryText = String(row?.MemUsage || row?.Mem || '').split('/')[0].trim();
     const match = /([\d.]+)\s*(B|KiB|MiB|GiB|KB|MB|GB)/i.exec(memoryText);
     const units = { b: 1, kib: 1024, mib: 1024 ** 2, gib: 1024 ** 3, kb: 1000, mb: 1000 ** 2, gb: 1000 ** 3 };
     const rssBytes = match ? safeNumber(match[1]) * (units[String(match[2]).toLowerCase()] || 1) : 0;

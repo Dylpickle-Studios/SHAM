@@ -1,8 +1,8 @@
 'use strict';
 
 const { DeploymentOperations } = require('./deployments');
-const { PACK_BIN, NIXPACKS_BIN } = require('../config');
-const { fs, path, os, http, net, crypto, spawn, express, httpProxy, DATA_DIR, SITES_DIR, RELEASES_DIR, PREVIEWS_DIR, BACKUPS_DIR, SITE_DATA_DIR, DOCKER_BIN, GIT_BIN, TAR_BIN, RESTIC_BIN, AWS_BIN, SFTP_BIN, ANUBIS_IMAGE, JOB_POLL_INTERVAL_MS, JOB_TIMEOUT_MS, BACKUP_TIMEOUT_MS, GIT_TIMEOUT_MS, PREVIEW_TTL_HOURS, HTTP_REQUEST_TIMEOUT_MS, encrypt, decrypt, getSecretSetting, setSecretSetting, safeRelativePath, runtimeEnvironment, buildEnvironment, operatorEnvironment, appendTail, commandAvailable, processOptions, terminate, terminateAndWait, runProcess, runConfiguredCommand, parseField, parseCron, cronMatches, nextCronDate, safeName, pathInside, sftpQuote, freePort, closeServer, siteRoot, requiredFile, ensureRequiredFile, validateGitUrl, validateBranch } = require('./shared');
+const { getRuntimeClient } = require('../runtime/client');
+const { fs, path, os, http, net, crypto, spawn, express, httpProxy, DATA_DIR, SITES_DIR, RELEASES_DIR, PREVIEWS_DIR, BACKUPS_DIR, SITE_DATA_DIR, GIT_BIN, TAR_BIN, RESTIC_BIN, AWS_BIN, SFTP_BIN, ANUBIS_IMAGE, JOB_POLL_INTERVAL_MS, JOB_TIMEOUT_MS, BACKUP_TIMEOUT_MS, GIT_TIMEOUT_MS, PREVIEW_TTL_HOURS, HTTP_REQUEST_TIMEOUT_MS, encrypt, decrypt, getSecretSetting, setSecretSetting, safeRelativePath, runtimeEnvironment, buildEnvironment, operatorEnvironment, appendTail, commandAvailable, processOptions, terminate, terminateAndWait, runProcess, runConfiguredCommand, parseField, parseCron, cronMatches, nextCronDate, safeName, pathInside, sftpQuote, freePort, closeServer, siteRoot, requiredFile, ensureRequiredFile, validateGitUrl, validateBranch } = require('./shared');
 
 class OperationsManager extends DeploymentOperations {
   validateAlertDestinationConfig(kind, input) {
@@ -168,6 +168,7 @@ class OperationsManager extends DeploymentOperations {
       await this.cleanupExpiredPreviews();
       await this.deliverAlerts();
       await this.exportTelemetry().catch((error) => this.manager.log(null, 'error', `OpenTelemetry export failed: ${error.message}`));
+      await getRuntimeClient().status().catch(() => {});
     })().finally(() => { if (this.jobTickPromise === operation) this.jobTickPromise = null; });
     this.jobTickPromise = operation;
     return operation;
@@ -198,23 +199,24 @@ class OperationsManager extends DeploymentOperations {
 
   capabilities() {
     const containerizedSham = fs.existsSync('/.dockerenv');
-    const dockerSocketAvailable = fs.existsSync('/var/run/docker.sock');
-    const dockerHostPathConfigured = Boolean(String(process.env.SHAM_DOCKER_HOST_DATA_PATH || '').trim());
-    const dockerBinaryAvailable = commandAvailable(DOCKER_BIN);
-    const docker = dockerBinaryAvailable && (!containerizedSham || (dockerSocketAvailable && dockerHostPathConfigured));
+    // The control plane never touches Docker directly; capability flags come
+    // from the Runtime Agent's own last-known status (refreshed in the
+    // background — see OperationsManager's status poll in operations-manager.js).
+    const agentStatus = getRuntimeClient().getCachedStatus();
+    const docker = Boolean(agentStatus.agentReachable && agentStatus.agentAuthenticated && agentStatus.dockerAvailable);
     return {
       docker,
-      dockerBinaryAvailable,
-      dockerSocketAvailable,
-      dockerHostPathConfigured,
-      dockerReason: docker ? '' : !dockerBinaryAvailable
-        ? 'Docker executable was not found.'
-        : containerizedSham && !dockerSocketAvailable
-          ? 'The optional Docker socket overlay is not enabled.'
-          : 'SHAM_DOCKER_HOST_DATA_PATH is not configured.',
+      agentReachable: Boolean(agentStatus.agentReachable),
+      agentAuthenticated: Boolean(agentStatus.agentAuthenticated),
+      dockerAvailable: Boolean(agentStatus.dockerAvailable),
+      dockerReason: docker ? '' : !agentStatus.agentReachable
+        ? 'Runtime agent unavailable.'
+        : !agentStatus.agentAuthenticated
+          ? 'Runtime agent authentication failed.'
+          : 'Docker daemon is unreachable from the runtime agent.',
       git: commandAvailable(GIT_BIN),
-      buildpacks: docker && commandAvailable(PACK_BIN),
-      nixpacks: docker && commandAvailable(NIXPACKS_BIN),
+      buildpacks: docker && Boolean(agentStatus.buildpacksAvailable),
+      nixpacks: docker && Boolean(agentStatus.nixpacksAvailable),
       anubis: docker && Boolean(ANUBIS_IMAGE),
       anubisImage: ANUBIS_IMAGE,
       containerizedSham

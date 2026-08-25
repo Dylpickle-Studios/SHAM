@@ -14,6 +14,9 @@ It can serve static projects directly, supervise arbitrary server processes, run
 > [!IMPORTANT]
 > SHAM is an infrastructure control plane. Process runtimes, Docker access, Compose projects, deployment commands, and server-side plugins can execute trusted code on your host. Use a dedicated host/VM where appropriate, run SHAM with minimal OS privileges, protect the Docker socket, and review code before deploying it.
 
+> [!NOTE]
+> **Architecture:** the internet-facing SHAM control plane never holds the Docker socket. All Docker/Compose/build execution is delegated over an authenticated local Unix socket to a separate **SHAM Runtime Agent** process, which is the only component with `/var/run/docker.sock` access. See [Runtime Agent architecture](docs/runtimes-and-docker.md#runtime-agent-architecture).
+
 ## Highlights
 
 | Area | Current capabilities |
@@ -74,7 +77,7 @@ The base Compose file intentionally **does not mount the Docker socket**.
 
 ### 2. Enable Docker-managed workloads only when needed
 
-Existing OCI images, Dockerfile builds, Docker Compose projects, Docker-isolated runtimes, and Anubis require access to the host Docker daemon when SHAM itself is containerized:
+Existing OCI images, Dockerfile builds, Docker Compose projects, Docker-isolated runtimes, and Anubis require access to the host Docker daemon. The overlay below starts a second, separate **`sham-runtime-agent`** container that owns that access — the main `sham` container never mounts the Docker socket, in this mode or any other:
 
 ```bash
 export SHAM_DOCKER_HOST_DATA_PATH="$(pwd)/sham-data"
@@ -90,7 +93,7 @@ docker compose \
   up -d
 ```
 
-This is **not Docker-in-Docker**: the Docker CLI inside SHAM talks to the host daemon through `/var/run/docker.sock`. That socket grants substantial authority over the host, so enable the overlay only where that trust boundary is acceptable.
+This is **not Docker-in-Docker**: the Docker CLI inside the `sham-runtime-agent` container talks to the host daemon through `/var/run/docker.sock`. That socket grants substantial authority over the host, so enable the overlay only where that trust boundary is acceptable. `sham` reaches `sham-runtime-agent` only over a local, authenticated Unix socket inside the shared `/data` volume — the agent publishes no port and joins no public network.
 
 `SHAM_DOCKER_HOST_DATA_PATH` is required because the host daemon must receive host-visible paths for build contexts and mounts; it cannot directly see SHAM's container-internal `/data/...` paths.
 
@@ -300,6 +303,7 @@ A few deployment-sensitive details are intentionally kept visible in the root RE
 
 - Use `SHAM_TRUSTED_EDGE_PROXIES` to enumerate reverse-proxy peers allowed to supply Cloudflare visitor identity headers. Keep this narrower than an entire private network unless direct origin access is blocked.
 - Managed Docker networking uses `SHAM_DOCKER_INTERNAL_NETWORK` for no-egress workloads and `SHAM_DOCKER_EGRESS_NETWORK` for workloads allowed outbound access.
+- Docker/Compose/build execution goes through the Runtime Agent, authenticated with `SHAM_RUNTIME_AGENT_TOKEN_PATH` over `SHAM_RUNTIME_AGENT_SOCKET`; only the agent process ever needs `/var/run/docker.sock`.
 - Deployment-webhook authentication recognizes provider signatures/tokens plus SHAM's own HMAC header. GitHub-style HMAC uses `X-Hub-Signature-256`; SHAM-native HMAC uses `X-SHAM-Signature`. See [Git and CI/CD](docs/git-and-cicd.md) for provider-specific behavior.
 - The release currently pins `jsonwebtoken` 9.0.3, Multer 2.2.0, and the committed lockfile; the Docker build runs `npm audit --omit=dev --audit-level=high`. Dependency versions remain source-controlled release policy and should be reviewed whenever the lockfile changes.
 

@@ -2,17 +2,18 @@
 
 const { DeliverySiteManager } = require('./delivery');
 const {
-  fs, path, net, spawn, httpProxy, SITES_DIR, SITE_DATA_DIR,
-  DOCKER_BIN, DOCKER_INTERNAL_NETWORK, DOCKER_EGRESS_NETWORK,
-  HTTP_REQUEST_TIMEOUT_MS, operatorEnvironment, hostForUrl, listen, closeServer,
+  fs, path, net, httpProxy, SITES_DIR, SITE_DATA_DIR,
+  DOCKER_INTERNAL_NETWORK, DOCKER_EGRESS_NETWORK,
+  HTTP_REQUEST_TIMEOUT_MS, hostForUrl, listen, closeServer,
   realFileInside, ensureDockerInternalNetwork, hydrateSite, siteRoot, dockerHostDataPath
 } = require('./shared');
-const { PACK_BIN, NIXPACKS_BIN, HEALTH_CHECK_CONCURRENCY } = require('../config');
+const { HEALTH_CHECK_CONCURRENCY } = require('../config');
 const { resolveRuntimeSpec, readManifest } = require('../runtime-spec');
 const {
   terminateProcessAndWait, lineLogger, shellCommand, commandExit, tcpProbe, httpProbe,
-  waitForReadiness, dockerPort, managedContainerName
+  waitForReadiness, managedContainerName
 } = require('../runtime-engine');
+const { getRuntimeClient } = require('../runtime/client');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const terminateAndWait = terminateProcessAndWait;
@@ -25,51 +26,6 @@ function ephemeralPort(host = '127.0.0.1') {
     server.listen(0, host, () => {
       const port = Number(server.address()?.port || 0);
       server.close((error) => error ? reject(error) : resolve(port));
-    });
-  });
-}
-
-function runTool(bin, args, { cwd, env, timeoutMs = 20 * 60_000, input = null, onLine = null, maxOutputBytes = 100_000, rejectOutputOverflow = false } = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { cwd, env: { ...operatorEnvironment(), ...(env || {}) }, stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsHide: true });
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    let timer = null;
-    const appendOutput = (current, chunk, limit, label) => {
-      const text = chunk.toString();
-      if (Buffer.byteLength(current) + chunk.length <= limit) return current + text;
-      if (rejectOutputOverflow) {
-        try { child.kill('SIGKILL'); } catch { /* gone */ }
-        finish(new Error(`${bin} ${label} exceeded the ${Math.ceil(limit / 1024)} KiB capture limit.`));
-        return current;
-      }
-      const combined = current + text;
-      return Buffer.byteLength(combined) <= limit ? combined : Buffer.from(combined).subarray(-limit).toString('utf8');
-    };
-    const finish = (error, value) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      if (error) reject(error); else resolve(value);
-    };
-    child.stdout.on('data', (chunk) => { stdout = appendOutput(stdout, chunk, maxOutputBytes, 'stdout'); });
-    child.stderr.on('data', (chunk) => { stderr = appendOutput(stderr, chunk, 100_000, 'stderr'); });
-    if (onLine) {
-      lineLogger(child.stdout, (line) => onLine('info', line));
-      lineLogger(child.stderr, (line) => onLine('error', line));
-    }
-    if (input !== null) child.stdin.end(input);
-    timer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch { /* gone */ }
-      finish(new Error(`${bin} timed out after ${Math.ceil(timeoutMs / 1000)} seconds.`));
-    }, timeoutMs);
-    timer.unref?.();
-    child.once('error', (error) => finish(error));
-    child.once('exit', (code, signal) => {
-      if (settled) return;
-      if (code === 0) finish(null, { stdout: stdout.trim(), stderr: stderr.trim() });
-      else finish(new Error(`${bin} exited ${code ?? signal ?? 'unexpectedly'}${stderr.trim() ? `: ${stderr.trim().slice(-2000)}` : ''}`));
     });
   });
 }
@@ -202,6 +158,7 @@ class SiteManager extends DeliverySiteManager {
   async buildContainerImage(site, spec, root, suffix) {
     const tag = `sham/site-${site.id}:${suffix}`.toLowerCase();
     const log = (level, line) => this.log(site.id, level, `build: ${line}`);
+    const client = getRuntimeClient();
     if (site.runtime_type === 'node' && site.runtime_isolation === 'docker') {
       const image = spec.container.image;
       const entry = String(site.node_entry || 'server.js').replaceAll('\\', '/');
@@ -211,23 +168,23 @@ class SiteManager extends DeliverySiteManager {
       const dockerfile = `FROM ${image}\nWORKDIR /app\nCOPY . .\n${install}ENV NODE_ENV=production\nCMD [\"node\", ${JSON.stringify(entry)}]\n`;
       const temp = path.join(require('../config').TMP_ROOT_DIR, `Dockerfile.site-${site.id}-${suffix}`);
       await fs.promises.writeFile(temp, dockerfile, { mode: 0o600 });
-      try { await runTool(DOCKER_BIN, ['build', '-f', temp, '-t', tag, root], { onLine: log }); }
+      try { await client.buildImage({ tag, contextPath: root, mode: 'dockerfile', dockerfilePath: temp, onLine: log }); }
       finally { await fs.promises.rm(temp, { force: true }); }
       return tag;
     }
     if (spec.container.mode === 'dockerfile') {
       const dockerfile = path.join(root, ...spec.container.dockerfilePath.split('/'));
       if (!realFileInside(root, dockerfile)) throw new Error(`Dockerfile is missing or unsafe: ${spec.container.dockerfilePath}`);
-      await runTool(DOCKER_BIN, ['build', '-f', dockerfile, '-t', tag, root], { onLine: log });
+      await client.buildImage({ tag, contextPath: root, mode: 'dockerfile', dockerfilePath: dockerfile, onLine: log });
       return tag;
     }
     if (spec.container.mode === 'buildpack') {
       const builder = spec.container.buildpackBuilder || 'paketobuildpacks/builder-jammy-base';
-      await runTool(PACK_BIN, ['build', tag, '--path', root, '--builder', builder], { onLine: log });
+      await client.buildImage({ tag, contextPath: root, mode: 'buildpack', builder, onLine: log });
       return tag;
     }
     if (spec.container.mode === 'nixpacks') {
-      await runTool(NIXPACKS_BIN, ['build', root, '--name', tag], { onLine: log });
+      await client.buildImage({ tag, contextPath: root, mode: 'nixpacks', onLine: log });
       return tag;
     }
     return spec.container.image;
@@ -274,55 +231,49 @@ class SiteManager extends DeliverySiteManager {
     await fs.promises.mkdir(dataDir, { recursive: true });
     const containerizedControlPlane = fs.existsSync('/.dockerenv');
     const env = this.runtimeEnvironment(site, spec, spec.container.port, '0.0.0.0', options.preview ? { SHAM_PREVIEW: '1' } : {});
-    const args = ['run', '-d', '--name', name, '--label', 'sham.managed=true', '--label', `sham.site_id=${site.id}`, '--init', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '--read-only', '--pids-limit', String(site.pids_limit || 128), '--tmpfs', '/tmp:rw,noexec,nosuid,size=64m'];
-    const dataMount = process.env.SHAM_DOCKER_HOST_DATA_PATH
-      ? path.join(path.resolve(process.env.SHAM_DOCKER_HOST_DATA_PATH), 'site-data', String(site.id))
-      : dataDir;
-    // Existing images are self-contained OCI artifacts. Do not bind SHAM's
-    // project tree over the image WORKDIR, which would hide files in the image.
-    if (containerizedControlPlane && !process.env.SHAM_DOCKER_HOST_DATA_PATH) args.push('-v', `sham-site-${site.id}-data:/data:rw`);
-    else args.push('-v', `${dataMount}:/data:rw`);
+    const client = getRuntimeClient();
     let internalHost = '127.0.0.1';
     let internalPort = spec.container.port;
+    let network = null;
+    const ports = [];
     if (containerizedControlPlane) {
-      const network = site.outbound_network ? DOCKER_EGRESS_NETWORK : DOCKER_INTERNAL_NETWORK;
+      network = site.outbound_network ? DOCKER_EGRESS_NETWORK : DOCKER_INTERNAL_NETWORK;
       if (!network) throw new Error(`Container runtimes require ${site.outbound_network ? 'SHAM_DOCKER_EGRESS_NETWORK' : 'SHAM_DOCKER_INTERNAL_NETWORK'} when SHAM runs in Docker.`);
-      args.push('--network', network);
       internalHost = name;
     } else {
-      args.push('-p', `127.0.0.1::${spec.container.port}`);
-      if (!site.outbound_network) args.push('--network', await ensureDockerInternalNetwork());
+      ports.push({ hostIp: '127.0.0.1', containerPort: spec.container.port });
+      if (!site.outbound_network) network = await ensureDockerInternalNetwork();
     }
-    if (site.memory_limit_mb > 0) args.push('--memory', `${site.memory_limit_mb}m`);
-    if (site.cpu_limit > 0) args.push('--cpus', String(site.cpu_limit));
-    for (const key of Object.keys(env)) if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) args.push('-e', key);
 
     let containerStarted = false;
     let backend = null;
     try {
       image = await this.buildContainerImage(site, spec, root, suffix);
-      args.push(image);
-      if (spec.container.mode === 'image' && spec.command && !(site.runtime_type === 'node' && site.runtime_isolation === 'docker')) {
-        if (Array.isArray(spec.command)) args.push(...spec.command);
-        else args.push('/bin/sh', '-lc', spec.command);
-      }
-      const result = await runTool(DOCKER_BIN, args, { env, timeoutMs: 120_000, onLine: (level, line) => this.log(site.id, level, `docker: ${line}`) });
+      const command = spec.container.mode === 'image' && spec.command && !(site.runtime_type === 'node' && site.runtime_isolation === 'docker')
+        ? (Array.isArray(spec.command) ? spec.command : ['/bin/sh', '-lc', spec.command])
+        : null;
+      // Existing images are self-contained OCI artifacts. Do not bind SHAM's
+      // project tree over the image WORKDIR, which would hide files in the image.
+      const { containerId } = await client.runContainer({
+        name, image, siteId: site.id, env, network, ports, command,
+        dataMount: { source: dataDir, target: '/data' },
+        namedVolume: `sham-site-${site.id}-data`,
+        memoryMb: site.memory_limit_mb > 0 ? site.memory_limit_mb : 0,
+        cpuLimit: site.cpu_limit > 0 ? site.cpu_limit : 0,
+        pidsLimit: site.pids_limit || 128
+      });
       containerStarted = true;
-      const containerId = result.stdout.split(/\s+/).at(-1) || name;
-      if (!containerizedControlPlane) internalPort = await dockerPort(name, spec.container.port);
-      const logs = spawn(DOCKER_BIN, ['logs', '-f', name], { env: operatorEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-      logs.once('error', (error) => { if (!backend?.stopping) this.log(site.id, 'error', `Could not follow container logs: ${error.message}`); });
-      lineLogger(logs.stdout, (line) => this.log(site.id, 'info', `container: ${line}`));
-      lineLogger(logs.stderr, (line) => this.log(site.id, 'error', `container: ${line}`));
-      backend = { driver: 'container', containerName: name, containerId, managedImage: managedImage ? image : null, logChild: logs, internalHost, internalPort, target: `http://${hostForUrl(internalHost)}:${internalPort}`, cwd: root, env, spec, root, active: false, stopping: false, site };
+      if (!containerizedControlPlane) internalPort = await client.containerPort({ name, containerPort: spec.container.port });
+      const logHandle = await client.streamContainerLogs({ name, onLine: (level, line) => this.log(site.id, level, `container: ${line}`) });
+      backend = { driver: 'container', containerName: name, containerId, managedImage: managedImage ? image : null, logHandle, internalHost, internalPort, target: `http://${hostForUrl(internalHost)}:${internalPort}`, cwd: root, env, spec, root, active: false, stopping: false, site };
       this.bindDockerBackendExit(site, backend, name);
       await this.waitBackendReadiness(site, backend, spec);
       return backend;
     } catch (error) {
       if (backend) await this.stopBackend(backend).catch(() => {});
       else {
-        if (containerStarted) await runTool(DOCKER_BIN, ['rm', '-f', name], { timeoutMs: 30_000 }).catch(() => {});
-        if (managedImage && image) await runTool(DOCKER_BIN, ['image', 'rm', '-f', image], { timeoutMs: 60_000 }).catch(() => {});
+        if (containerStarted) await client.removeContainer({ name }).catch(() => {});
+        if (managedImage && image) await client.removeImage({ tag: image }).catch(() => {});
       }
       throw error;
     }
@@ -333,9 +284,7 @@ class SiteManager extends DeliverySiteManager {
     if (!realFileInside(root, file)) throw new Error(`Compose file is missing or unsafe: ${spec.compose.file}`);
     const containerizedControlPlane = fs.existsSync('/.dockerenv');
     const env = this.runtimeEnvironment(site, spec, spec.compose.port, '0.0.0.0', preview ? { SHAM_PREVIEW: '1' } : {});
-    const result = await runTool(DOCKER_BIN, ['compose', '-f', file, 'config', '--format', 'json'], { cwd: root, env, timeoutMs: 30_000, maxOutputBytes: 2 * 1024 * 1024, rejectOutputOverflow: true });
-    let config;
-    try { config = JSON.parse(result.stdout); } catch { throw new Error('Docker Compose did not return a valid normalized configuration.'); }
+    const { config } = await getRuntimeClient().composeConfig({ files: [file], cwd: root, env, service: spec.compose.service, containerPort: spec.compose.port });
     validateComposeProjectPaths(config, root);
     composeRuntimePolicy(config, spec.compose.service, { containerPort: spec.compose.port, requirePublishedPort: false });
     if (!site.outbound_network) {
@@ -359,8 +308,12 @@ class SiteManager extends DeliverySiteManager {
       runtimeOverride.networks = Object.fromEntries(networkNames.map((name) => [name, { internal: true }]));
     }
     const selectedService = config?.services?.[spec.compose.service] || {};
+    runtimeOverride.services[spec.compose.service] = {
+      ...(runtimeOverride.services[spec.compose.service] || {}),
+      labels: { 'sham.managed': 'true', 'sham.site_id': String(site.id) }
+    };
     if (!containerizedControlPlane && !(Array.isArray(selectedService.ports) && selectedService.ports.length)) {
-      runtimeOverride.services[spec.compose.service] = { ports: [`127.0.0.1::${spec.compose.port}`] };
+      runtimeOverride.services[spec.compose.service].ports = [`127.0.0.1::${spec.compose.port}`];
     }
     if (Object.keys(runtimeOverride.services).length || Object.keys(runtimeOverride.networks).length) {
       const overrideDir = path.join(SITE_DATA_DIR, String(site.id));
@@ -370,14 +323,13 @@ class SiteManager extends DeliverySiteManager {
 `, { mode: 0o600, flag: 'wx' });
       composeFiles.push(networkOverride);
     }
-    const fileArgs = composeFiles.flatMap((composeFile) => ['-f', composeFile]);
     let started = false;
     let backend = null;
+    const client = getRuntimeClient();
     try {
-      await runTool(DOCKER_BIN, ['compose', '-p', project, ...fileArgs, 'up', '-d', '--build', spec.compose.service], { cwd: root, env, onLine: (level, line) => this.log(site.id, level, `compose: ${line}`) });
+      await client.composeUp({ project, files: composeFiles, cwd: root, env, service: spec.compose.service, containerPort: spec.compose.port, onLine: (level, line) => this.log(site.id, level, `compose: ${line}`) });
       started = true;
-      const container = await runTool(DOCKER_BIN, ['compose', '-p', project, ...fileArgs, 'ps', '-q', spec.compose.service], { cwd: root, env, timeoutMs: 30_000 });
-      const containerId = container.stdout.trim();
+      const containerId = await client.composePs({ project, files: composeFiles, cwd: root, env, service: spec.compose.service });
       if (!containerId) throw new Error(`Compose service ${spec.compose.service} did not create a container.`);
 
       let internalHost = '127.0.0.1';
@@ -386,13 +338,10 @@ class SiteManager extends DeliverySiteManager {
         const network = site.outbound_network ? DOCKER_EGRESS_NETWORK : DOCKER_INTERNAL_NETWORK;
         if (!network) throw new Error(`Compose runtimes require ${site.outbound_network ? 'SHAM_DOCKER_EGRESS_NETWORK' : 'SHAM_DOCKER_INTERNAL_NETWORK'} when SHAM runs in Docker.`);
         const alias = `sham-compose-${site.id}-${suffix}`.replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 120);
-        await runTool(DOCKER_BIN, ['network', 'connect', '--alias', alias, network, containerId], { timeoutMs: 30_000 });
+        await client.connectNetwork({ network, containerId, alias });
         internalHost = alias;
       } else {
-        const published = await runTool(DOCKER_BIN, ['compose', '-p', project, ...fileArgs, 'port', spec.compose.service, String(spec.compose.port)], { cwd: root, env, timeoutMs: 30_000 });
-        const match = /:(\d+)\s*$/.exec(published.stdout.trim());
-        if (!match) throw new Error(`Compose service ${spec.compose.service} did not publish container port ${spec.compose.port} to loopback.`);
-        internalPort = Number(match[1]);
+        internalPort = await client.composePort({ project, files: composeFiles, cwd: root, env, service: spec.compose.service, containerPort: spec.compose.port });
       }
       backend = { driver: 'compose', composeProject: project, composeFile: file, composeFiles, networkOverride, composeService: spec.compose.service, containerId, internalHost, internalPort, target: `http://${hostForUrl(internalHost)}:${internalPort}`, cwd: root, env, spec, root, active: false, stopping: false, site };
       this.bindDockerBackendExit(site, backend, containerId);
@@ -400,7 +349,7 @@ class SiteManager extends DeliverySiteManager {
       return backend;
     } catch (error) {
       if (backend) await this.stopBackend(backend).catch(() => {});
-      else if (started) await runTool(DOCKER_BIN, ['compose', '-p', project, ...fileArgs, 'down', '--remove-orphans'], { cwd: root, env, timeoutMs: 60_000 }).catch(() => {});
+      else if (started) await client.composeDown({ project, files: composeFiles, cwd: root, env }).catch(() => {});
       if (networkOverride) await fs.promises.rm(networkOverride, { force: true }).catch(() => {});
       throw error;
     }
@@ -471,18 +420,11 @@ class SiteManager extends DeliverySiteManager {
 
   bindDockerBackendExit(site, backend, containerRef) {
     if (!containerRef) return;
-    const waiter = spawn(DOCKER_BIN, ['wait', String(containerRef)], { env: operatorEnvironment(), stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
-    backend.waitChild = waiter;
-    let output = '';
-    waiter.stdout.on('data', (chunk) => { output = `${output}${chunk}`.slice(-64); });
-    waiter.once('error', (error) => {
-      if (!backend.stopping) this.log(site.id, 'error', `Could not monitor Docker runtime exit: ${error.message}`);
-    });
-    waiter.once('exit', (waitCode) => {
-      if (waitCode !== 0 || backend.stopping) return;
-      const code = Number.parseInt(output.trim().split(/\s+/).at(-1), 10);
-      this.handleBackendExit(site, backend, Number.isInteger(code) ? code : null, null);
-    });
+    getRuntimeClient().waitContainer({
+      name: containerRef,
+      onExit: (code) => { if (!backend.stopping) this.handleBackendExit(site, backend, code, null); }
+    }).then((handle) => { backend.waitHandle = handle; })
+      .catch((error) => { if (!backend.stopping) this.log(site.id, 'error', `Could not monitor Docker runtime exit: ${error.message}`); });
   }
 
   createGateway(site, backend) {
@@ -699,15 +641,16 @@ class SiteManager extends DeliverySiteManager {
     const grace = Math.max(0, Number(backend.spec?.shutdownGraceMs ?? 10_000));
     if (backend.driver === 'process') await terminateProcessAndWait(backend.child, grace);
     if (backend.driver === 'container') {
-      try { backend.logChild?.kill(); } catch { /* ignore */ }
-      try { backend.waitChild?.kill(); } catch { /* ignore */ }
-      await runTool(DOCKER_BIN, ['stop', '--time', String(Math.ceil(grace / 1000)), backend.containerName], { timeoutMs: grace + 10_000 }).catch(() => {});
-      await runTool(DOCKER_BIN, ['rm', '-f', backend.containerName], { timeoutMs: 30_000 }).catch(() => {});
-      if (backend.managedImage) await runTool(DOCKER_BIN, ['image', 'rm', '-f', backend.managedImage], { timeoutMs: 60_000 }).catch(() => {});
+      try { backend.logHandle?.stop(); } catch { /* ignore */ }
+      try { backend.waitHandle?.stop(); } catch { /* ignore */ }
+      const client = getRuntimeClient();
+      await client.stopContainer({ name: backend.containerName, timeoutSec: Math.ceil(grace / 1000) }).catch(() => {});
+      await client.removeContainer({ name: backend.containerName }).catch(() => {});
+      if (backend.managedImage) await client.removeImage({ tag: backend.managedImage }).catch(() => {});
     }
     if (backend.driver === 'compose') {
-      try { backend.waitChild?.kill(); } catch { /* ignore */ }
-      await runTool(DOCKER_BIN, ['compose', '-p', backend.composeProject, ...(backend.composeFiles || [backend.composeFile]).flatMap((composeFile) => ['-f', composeFile]), 'down', '--remove-orphans'], { cwd: backend.cwd, env: backend.env, timeoutMs: Math.max(60_000, grace + 10_000) }).catch(() => {});
+      try { backend.waitHandle?.stop(); } catch { /* ignore */ }
+      await getRuntimeClient().composeDown({ project: backend.composeProject, files: backend.composeFiles || [backend.composeFile], cwd: backend.cwd, env: backend.env }).catch(() => {});
       if (backend.networkOverride) await fs.promises.rm(backend.networkOverride, { force: true }).catch(() => {});
     }
   }
@@ -818,11 +761,11 @@ class SiteManager extends DeliverySiteManager {
   async backendCommandProbe(backend, command) {
     if (backend.driver === 'process') return commandExit(command, { cwd: backend.cwd, env: backend.env, timeoutMs: 5000 });
     if (backend.driver === 'container') {
-      try { await runTool(DOCKER_BIN, ['exec', backend.containerName, '/bin/sh', '-lc', command], { timeoutMs: 5000 }); return { ok: true }; }
+      try { await getRuntimeClient().containerExec({ name: backend.containerName, command, timeoutMs: 5000 }); return { ok: true }; }
       catch (error) { return { ok: false, message: error.message }; }
     }
     if (backend.driver === 'compose') {
-      try { await runTool(DOCKER_BIN, ['compose', '-p', backend.composeProject, ...(backend.composeFiles || [backend.composeFile]).flatMap((composeFile) => ['-f', composeFile]), 'exec', '-T', backend.composeService, '/bin/sh', '-lc', command], { cwd: backend.cwd, env: backend.env, timeoutMs: 5000 }); return { ok: true }; }
+      try { await getRuntimeClient().composeExec({ project: backend.composeProject, files: backend.composeFiles || [backend.composeFile], cwd: backend.cwd, env: backend.env, service: backend.composeService, command, timeoutMs: 5000 }); return { ok: true }; }
       catch (error) { return { ok: false, message: error.message }; }
     }
     return { ok: true };
@@ -916,6 +859,7 @@ class SiteManager extends DeliverySiteManager {
   async restart(id) { await this.stop(id); await this.start(id); }
 
   async reconcileRuntimes() {
+    const client = getRuntimeClient();
     const records = this.db.prepare('SELECT * FROM runtime_instances').all();
     for (const row of records) {
       if (row.driver === 'process' && /^\d+$/.test(String(row.external_id)) && process.platform === 'linux') {
@@ -926,25 +870,14 @@ class SiteManager extends DeliverySiteManager {
         const root = String(row.root_path || '');
         const composeFile = site && root ? path.join(root, ...String(site.compose_file || 'compose.yaml').replaceAll('\\', '/').split('/')) : '';
         if (composeFile && realFileInside(root, composeFile)) {
-          await runTool(DOCKER_BIN, ['compose', '-p', String(row.external_id), '-f', composeFile, 'down', '--remove-orphans'], { cwd: root, timeoutMs: 60_000 }).catch(() => {});
+          await client.cleanupComposeProject({ project: String(row.external_id), file: composeFile, cwd: root }).catch(() => {});
         } else {
-          const containers = await runTool(DOCKER_BIN, ['ps', '-aq', '--filter', `label=com.docker.compose.project=${String(row.external_id)}`], { timeoutMs: 20_000 }).catch(() => ({ stdout: '' }));
-          for (const id of containers.stdout.split(/\s+/).filter(Boolean)) await runTool(DOCKER_BIN, ['rm', '-f', id], { timeoutMs: 30_000 }).catch(() => {});
-          const networks = await runTool(DOCKER_BIN, ['network', 'ls', '-q', '--filter', `label=com.docker.compose.project=${String(row.external_id)}`], { timeoutMs: 20_000 }).catch(() => ({ stdout: '' }));
-          for (const id of networks.stdout.split(/\s+/).filter(Boolean)) await runTool(DOCKER_BIN, ['network', 'rm', id], { timeoutMs: 30_000 }).catch(() => {});
+          await client.cleanupOrphanedComposeProject({ project: String(row.external_id) }).catch(() => {});
         }
       }
     }
-    try {
-      const result = await runTool(DOCKER_BIN, ['ps', '-aq', '--filter', 'label=sham.managed=true'], { timeoutMs: 20_000 });
-      for (const id of result.stdout.split(/\s+/).filter(Boolean)) await runTool(DOCKER_BIN, ['rm', '-f', id], { timeoutMs: 30_000 }).catch(() => {});
-    } catch { /* Docker is optional. */ }
-    try {
-      const images = await runTool(DOCKER_BIN, ['image', 'ls', '--format', '{{.Repository}}:{{.Tag}}'], { timeoutMs: 20_000 });
-      for (const image of images.stdout.split(/\r?\n/).map((value) => value.trim()).filter((value) => /^sham\/site-\d+:/.test(value))) {
-        await runTool(DOCKER_BIN, ['image', 'rm', '-f', image], { timeoutMs: 60_000 }).catch(() => {});
-      }
-    } catch { /* Docker is optional. */ }
+    await client.cleanupManagedContainers().catch(() => { /* Docker is optional. */ });
+    await client.cleanupManagedImages().catch(() => { /* Docker is optional. */ });
     this.db.prepare('DELETE FROM runtime_instances').run();
   }
 

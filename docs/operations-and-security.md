@@ -154,10 +154,13 @@ See [API and CLI](api-and-cli.md).
 
 Docker daemon access is effectively host-administration access. SHAM validates hosted Compose/runtime configurations to block common escape paths, but that does not turn one Docker daemon into a hostile multi-tenant security boundary.
 
+The Docker socket is held only by the separate **Runtime Agent** process, never by the internet-facing control plane (dashboard/API/webhooks). The agent authenticates every request from the control plane with a locally generated, timing-safe-compared token over a Unix socket, exposes only a small allowlist of typed operations (no generic Docker/shell passthrough), and independently re-validates every privileged invariant (SHAM-managed resource labels, mount paths confined to SHAM's data directory, no privileged/host-network/host-PID/host-IPC containers, no Docker-socket or arbitrary host bind mounts) rather than trusting that the control plane already checked. This means a compromise of the control plane no longer directly implies Docker/root-level host access — but mounting the socket into the agent still grants it that authority, so the agent remains a privileged component and the recommendations below still apply to it.
+
 Recommendations:
 
-- Keep SHAM itself minimally privileged.
-- Mount the Docker socket only when required.
+- Keep SHAM's control plane itself minimally privileged; it no longer needs the Docker socket at all.
+- Mount the Docker socket into the Runtime Agent only when required, and treat that host/VM as trusted infrastructure.
+- Never expose the Runtime Agent's Unix socket or token beyond the local host; it is not designed to be reachable over a network.
 - Review Dockerfiles, Compose files, and repository manifests.
 - Keep supporting services private.
 - Use named volumes instead of host bind mounts.

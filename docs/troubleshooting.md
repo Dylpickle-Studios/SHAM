@@ -48,14 +48,32 @@ Confirm the application actually uses `PORT`/configured port variable.
 
 ## Docker capability is unavailable
 
-Verify:
+Docker-backed features go through the separate **Runtime Agent** process (see [Runtimes and Docker](runtimes-and-docker.md#runtime-agent-architecture)). Check `capabilities` in the Operations payload (or **Settings → Instance**) for `agentReachable`, `agentAuthenticated`, and `dockerAvailable`, and see [Runtime Agent](#runtime-agent) below.
 
-```bash
-docker version
-docker info
-```
+If SHAM itself runs in Docker, the base Compose file does not mount the Docker socket into `sham`, and never does even under the isolation overlay — only `sham-runtime-agent` does. Use the optional isolation overlay only when you intend to grant Docker-daemon control to the agent.
 
-If SHAM itself runs in Docker, the base Compose file does not mount the Docker socket. Use the optional isolation overlay only when you intend to grant SHAM Docker-daemon control.
+## Runtime Agent
+
+Symptoms map to `capabilities.dockerReason` in the dashboard/API:
+
+**"Runtime agent unavailable" (`agentReachable: false`)**
+- The `sham-runtime-agent` container/process is not running, or `SHAM_RUNTIME_AGENT_SOCKET` does not point at the same path in both processes.
+- With the isolation overlay: `docker compose ps sham-runtime-agent` and check its logs.
+- Direct installs: run `npm run runtime-agent` (or `node runtime-agent/index.js`) alongside `npm start`.
+- Confirm both processes share the same `SHAM_DATA_PATH` — the socket lives at `<SHAM_DATA_PATH>/runtime-agent/agent.sock` by default, so a mismatched data path looks identical to "agent not running."
+
+**"Runtime agent authentication failed" (`agentAuthenticated: false`)**
+- `SHAM_RUNTIME_AGENT_TOKEN_PATH` differs between the two processes, or one side has a stale token file from a previous, separately-provisioned data directory.
+- Fix: ensure both processes read `<SHAM_DATA_PATH>/runtime-agent/agent.token` from the same shared volume/filesystem; do not copy the token file manually between hosts.
+
+**"Docker daemon is unreachable from the runtime agent" (agent reachable, `dockerAvailable: false`)**
+- The agent itself cannot reach Docker: socket not mounted into the agent container, `DOCKER_GID` mismatch, or the daemon is down. Run `docker version` **inside the `sham-runtime-agent` container**, not the `sham` container — it no longer has Docker access at all.
+
+**Control-plane/agent version mismatch**
+- Both ship in the same image and are updated together; if you build a custom agent image separately from the control plane, requests fail with a `PROTOCOL_VERSION_MISMATCH` error until both sides run matching versions.
+
+**Permission denied on the Docker socket**
+- `DOCKER_GID` must match the actual GID of `/var/run/docker.sock` on the host running the agent: `stat -c '%g' /var/run/docker.sock`.
 
 ## Existing Docker image fails
 

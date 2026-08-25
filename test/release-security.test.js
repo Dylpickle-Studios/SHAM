@@ -110,10 +110,11 @@ test('hosted and helper processes receive purpose-specific environment allowlist
   const integrations = read('src/integrations.js');
   const scanner = read('src/dependency-scanner.js');
   assert.match(sites, /runtimeEnvironment\(/);
-  assert.match(sites, /spawn\(DOCKER_BIN,[\s\S]*env: operatorEnvironment\(\)/);
-  assert.match(sites, /execFileAsync\(DOCKER_BIN,[\s\S]*env: operatorEnvironment\(\)/);
   assert.match(operations, /environmentMode === 'runtime' \? runtimeEnvironment/);
-  assert.match(operations, /spawn\(DOCKER_BIN,[\s\S]*env: operatorEnvironment\(\)/);
+  // Docker itself is only ever invoked by the privileged Runtime Agent, which
+  // still spawns it with the same sanitized environment.
+  const agentDocker = read('runtime-agent/docker.js');
+  assert.match(agentDocker, /spawn\(bin, args,[\s\S]*env: \{ \.\.\.operatorEnvironment\(\)/);
   assert.match(integrations, /env:\s*operatorEnvironment\(\)/);
   assert.match(scanner, /env:\s*buildEnvironment\(\{ NODE_ENV: 'production' \}\)/);
   assert.doesNotMatch(integrations, /env:\s*process\.env/);

@@ -131,6 +131,6 @@ test('all security, service, worker, and browser code is included in the recursi
   const pkg = JSON.parse(read('package.json'));
   assert.match(pkg.scripts.check, /scripts\/check-syntax\.js/);
   const checker = read('scripts/check-syntax.js');
-  assert.match(checker, /const roots = \[path\.join\(root, 'src'\), path\.join\(root, 'public'\)\]/);
+  assert.match(checker, /const roots = \[path\.join\(root, 'src'\), path\.join\(root, 'public'\), path\.join\(root, 'runtime-agent'\)\]/);
   assert.match(checker, /if \(entry\.isDirectory\(\)\) collect\(absolute\)/);
 });

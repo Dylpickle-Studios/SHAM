@@ -4,28 +4,19 @@ const { ConfigurationOperations } = require('./configuration');
 const { applyGitProviderCredentials, providerForRepositoryUrl, providerCommitUrl, normalizeWebhookBaseUrl, ensureProviderWebhook } = require('../git-providers');
 const { readManifest, resolveRuntimeSpec, executionPolicyHash } = require('../runtime-spec');
 const { createEnvFile } = require('../runtime-engine');
-const { fs, path, os, http, net, crypto, spawn, express, httpProxy, DATA_DIR, SITES_DIR, RELEASES_DIR, PREVIEWS_DIR, BACKUPS_DIR, SITE_DATA_DIR, DOCKER_BIN, GIT_BIN, TAR_BIN, RESTIC_BIN, AWS_BIN, SFTP_BIN, ANUBIS_IMAGE, JOB_POLL_INTERVAL_MS, JOB_TIMEOUT_MS, BACKUP_TIMEOUT_MS, GIT_TIMEOUT_MS, PREVIEW_TTL_HOURS, HTTP_REQUEST_TIMEOUT_MS, encrypt, decrypt, getSecretSetting, setSecretSetting, safeRelativePath, runtimeEnvironment, buildEnvironment, operatorEnvironment, appendTail, commandAvailable, processOptions, terminate, terminateAndWait, runProcess, runConfiguredCommand, parseField, parseCron, cronMatches, nextCronDate, safeName, pathInside, sftpQuote, freePort, closeServer, siteRoot, requiredFile, ensureRequiredFile, validateGitUrl, validateBranch } = require('./shared');
+const { getRuntimeClient } = require('../runtime/client');
+const { fs, path, os, http, net, crypto, express, httpProxy, DATA_DIR, SITES_DIR, RELEASES_DIR, PREVIEWS_DIR, BACKUPS_DIR, SITE_DATA_DIR, GIT_BIN, TAR_BIN, RESTIC_BIN, AWS_BIN, SFTP_BIN, ANUBIS_IMAGE, JOB_POLL_INTERVAL_MS, JOB_TIMEOUT_MS, BACKUP_TIMEOUT_MS, GIT_TIMEOUT_MS, PREVIEW_TTL_HOURS, HTTP_REQUEST_TIMEOUT_MS, encrypt, decrypt, getSecretSetting, setSecretSetting, safeRelativePath, runtimeEnvironment, buildEnvironment, operatorEnvironment, appendTail, commandAvailable, terminateAndWait, runProcess, runConfiguredCommand, parseField, parseCron, cronMatches, nextCronDate, safeName, pathInside, sftpQuote, freePort, closeServer, siteRoot, requiredFile, ensureRequiredFile, validateGitUrl, validateBranch } = require('./shared');
 
 class DeploymentOperations extends ConfigurationOperations {
-  hostMountPathForStage(stage) {
-    if (!fs.existsSync('/.dockerenv')) return stage;
-    const hostData = String(process.env.SHAM_DOCKER_HOST_DATA_PATH || '').trim();
-    if (!hostData) throw new Error('Containerized builds require SHAM_DOCKER_HOST_DATA_PATH so Docker can mount the staged source directory.');
-    const relative = path.relative(DATA_DIR, stage);
-    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Staged build path is outside SHAM data storage.');
-    return path.join(path.resolve(hostData), relative);
-  }
-
   async runContainerBuildCommand(site, stage, command, environment, label, deploymentId, imageRef) {
     const image = String(imageRef || '').trim();
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._/@:-]{0,255}$/.test(image)) throw new Error('Container image is invalid.');
     const envFile = await createEnvFile(site.id, environment);
     try {
-      await runProcess(DOCKER_BIN, ['run', '--rm', '--init', '--env-file', envFile, '-v', `${this.hostMountPathForStage(stage)}:/workspace:rw`, '-w', '/workspace', image, '/bin/sh', '-lc', command], this.trackedProcessOptions({
-        timeoutMs: GIT_TIMEOUT_MS,
-        env: operatorEnvironment(),
+      await getRuntimeClient().sandboxRun({
+        image, envFile, workspaceSource: stage, command, timeoutMs: GIT_TIMEOUT_MS,
         onLine: (level, line) => this.manager.log(site.id, level, `${label}: ${line}`, { deploymentId })
-      }));
+      });
     } finally { await fs.promises.rm(envFile, { force: true }).catch(() => {}); }
   }
 
@@ -493,16 +484,6 @@ class DeploymentOperations extends ConfigurationOperations {
 `);
   }
 
-  dockerHostPath(localPath) {
-    const resolved = path.resolve(localPath);
-    const relative = path.relative(DATA_DIR, resolved);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Docker mount path is outside SHAM_DATA_PATH.');
-    if (!fs.existsSync('/.dockerenv')) return resolved;
-    const hostRoot = String(process.env.SHAM_DOCKER_HOST_DATA_PATH || '').trim();
-    if (!hostRoot) throw new Error('Anubis requires SHAM_DOCKER_HOST_DATA_PATH when SHAM itself runs in Docker.');
-    return path.join(path.resolve(hostRoot), relative);
-  }
-
   async startAnubis(site) {
     if (!site.anubis_enabled || !site.edge_enabled) return null;
     if (this.anubisRuntimes.has(site.id)) return this.anubisRuntimes.get(site.id);
@@ -513,51 +494,33 @@ class DeploymentOperations extends ConfigurationOperations {
     await fs.promises.mkdir(configDir, { recursive: true });
     const policyPath = path.join(configDir, 'botPolicy.yaml');
     await fs.promises.writeFile(policyPath, this.anubisPolicy(site, metricsPort), { mode: 0o600 });
-    const hostPolicyPath = this.dockerHostPath(policyPath);
-    const networkArgs = fs.existsSync('/.dockerenv') && process.env.HOSTNAME
-      ? ['--network', `container:${process.env.HOSTNAME}`]
-      : ['--network', 'host'];
-    const args = ['run', '--rm', '--name', `sham-anubis-${site.id}`, ...networkArgs,
-      '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '--read-only',
-      '--memory', '256m', '--cpus', '1', '--pids-limit', '128',
-      '--tmpfs', '/tmp:rw,noexec,nosuid,size=32m', '-v', `${hostPolicyPath}:/data/cfg/botPolicy.yaml:ro`,
-      '-e', `BIND=127.0.0.1:${port}`, '-e', 'BIND_NETWORK=tcp',
-      '-e', `TARGET=http://127.0.0.1:${site.port}`, '-e', 'POLICY_FNAME=/data/cfg/botPolicy.yaml',
-      '-e', `DIFFICULTY=${Number(site.anubis_difficulty || 4)}`, '-e', 'SERVE_ROBOTS_TXT=true',
-      '-e', `REDIRECT_DOMAINS=${site.domain}`, '-e', `COOKIE_DOMAIN=${site.domain}`, ANUBIS_IMAGE];
-    const child = spawn(DOCKER_BIN, args, processOptions({ env: operatorEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] }));
-    child.stdout.on('data', (chunk) => this.manager.log(site.id, 'info', `anubis: ${chunk.toString().trim().slice(0, 1200)}`));
-    child.stderr.on('data', (chunk) => this.manager.log(site.id, 'error', `anubis: ${chunk.toString().trim().slice(0, 1200)}`));
+    const name = `sham-anubis-${site.id}`;
+    const networkMode = fs.existsSync('/.dockerenv') && process.env.HOSTNAME ? `container:${process.env.HOSTNAME}` : 'host';
+    const client = getRuntimeClient();
+    try {
+      await client.sidecarRun({
+        name, networkMode, policyFile: policyPath, port, targetPort: site.port,
+        difficulty: Number(site.anubis_difficulty || 4), domain: site.domain
+      });
+    } catch (error) { throw new Error(`Could not start Anubis Docker runtime: ${error.message}`); }
+    const waitHandle = await client.waitContainer({
+      name,
+      onExit: () => { if (this.anubisRuntimes.get(site.id) === runtime) this.anubisRuntimes.delete(site.id); }
+    }).catch(() => null);
     await new Promise((resolve, reject) => {
       const started = Date.now();
-      let settled = false;
-      let retryTimer = null;
-      let spawnError = null;
-      const finish = (error) => {
-        if (settled) return;
-        settled = true;
-        if (retryTimer) clearTimeout(retryTimer);
-        child.off('error', onSpawnError);
-        if (error) reject(error); else resolve();
-      };
-      const onSpawnError = (error) => { spawnError = error; finish(new Error(`Could not start Anubis Docker runtime: ${error.message}`)); };
-      child.once('error', onSpawnError);
       const check = () => {
-        if (settled) return;
-        if (spawnError) return finish(new Error(`Could not start Anubis Docker runtime: ${spawnError.message}`));
-        if (child.exitCode !== null || child.signalCode !== null) return finish(new Error('Anubis exited during startup. Verify Docker and the pinned image.'));
         const socket = net.connect({ host: '127.0.0.1', port });
-        socket.once('connect', () => { socket.destroy(); finish(); });
+        socket.once('connect', () => { socket.destroy(); resolve(); });
         socket.once('error', () => {
           socket.destroy();
-          if (Date.now() - started > 30_000) finish(new Error('Anubis did not become ready within 30 seconds.'));
-          else { retryTimer = setTimeout(check, 200); retryTimer.unref?.(); }
+          if (Date.now() - started > 30_000) reject(new Error('Anubis did not become ready within 30 seconds.'));
+          else setTimeout(check, 200).unref?.();
         });
       };
       check();
-    }).catch(async (error) => { terminate(child); await runProcess(DOCKER_BIN, ['rm', '-f', `sham-anubis-${site.id}`], this.trackedProcessOptions({ timeoutMs: 10_000 })).catch(() => {}); throw error; });
-    const runtime = { child, port, metricsPort, target: `http://127.0.0.1:${port}`, metrics: `http://127.0.0.1:${metricsPort}/metrics` };
-    child.once('exit', () => { if (this.anubisRuntimes.get(site.id) === runtime) this.anubisRuntimes.delete(site.id); });
+    }).catch(async (error) => { waitHandle?.stop(); await client.sidecarRemove({ name }).catch(() => {}); throw error; });
+    const runtime = { name, waitHandle, port, metricsPort, target: `http://127.0.0.1:${port}`, metrics: `http://127.0.0.1:${metricsPort}/metrics` };
     this.anubisRuntimes.set(site.id, runtime);
     this.manager.log(site.id, 'info', `Anubis protection started with ${site.anubis_preset} policy.`);
     return runtime;
@@ -567,8 +530,8 @@ class DeploymentOperations extends ConfigurationOperations {
     const runtime = this.anubisRuntimes.get(Number(siteId));
     if (!runtime) return;
     this.anubisRuntimes.delete(Number(siteId));
-    terminate(runtime.child);
-    await runProcess(DOCKER_BIN, ['rm', '-f', `sham-anubis-${siteId}`], this.trackedProcessOptions({ timeoutMs: 15_000 })).catch(() => {});
+    runtime.waitHandle?.stop();
+    await getRuntimeClient().sidecarRemove({ name: runtime.name || `sham-anubis-${siteId}` }).catch(() => {});
   }
 
   async afterSiteStart(site) {

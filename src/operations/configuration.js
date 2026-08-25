@@ -1,7 +1,8 @@
 'use strict';
 
 const { isEncrypted } = require('../secret-store');
-const { fs, path, os, http, net, crypto, spawn, express, httpProxy, DATA_DIR, SITES_DIR, RELEASES_DIR, PREVIEWS_DIR, BACKUPS_DIR, SITE_DATA_DIR, DOCKER_BIN, GIT_BIN, TAR_BIN, RESTIC_BIN, AWS_BIN, SFTP_BIN, ANUBIS_IMAGE, JOB_POLL_INTERVAL_MS, JOB_TIMEOUT_MS, BACKUP_TIMEOUT_MS, GIT_TIMEOUT_MS, PREVIEW_TTL_HOURS, HTTP_REQUEST_TIMEOUT_MS, encrypt, decrypt, getSecretSetting, setSecretSetting, safeRelativePath, runtimeEnvironment, buildEnvironment, operatorEnvironment, appendTail, commandAvailable, processOptions, terminate, terminateAndWait, runProcess, runConfiguredCommand, parseField, parseCron, cronMatches, nextCronDate, safeName, pathInside, sftpQuote, freePort, closeServer, siteRoot, requiredFile, ensureRequiredFile, validateGitUrl, validateBranch } = require('./shared');
+const { getRuntimeClient } = require('../runtime/client');
+const { fs, path, os, http, net, crypto, spawn, express, httpProxy, DATA_DIR, SITES_DIR, RELEASES_DIR, PREVIEWS_DIR, BACKUPS_DIR, SITE_DATA_DIR, GIT_BIN, TAR_BIN, RESTIC_BIN, AWS_BIN, SFTP_BIN, ANUBIS_IMAGE, JOB_POLL_INTERVAL_MS, JOB_TIMEOUT_MS, BACKUP_TIMEOUT_MS, GIT_TIMEOUT_MS, PREVIEW_TTL_HOURS, HTTP_REQUEST_TIMEOUT_MS, encrypt, decrypt, getSecretSetting, setSecretSetting, safeRelativePath, runtimeEnvironment, buildEnvironment, operatorEnvironment, appendTail, commandAvailable, processOptions, terminate, terminateAndWait, runProcess, runConfiguredCommand, parseField, parseCron, cronMatches, nextCronDate, safeName, pathInside, sftpQuote, freePort, closeServer, siteRoot, requiredFile, ensureRequiredFile, validateGitUrl, validateBranch } = require('./shared');
 
 class ConfigurationOperations {
   constructor({ db, manager, snapshotManager, edgeProxy = null }) {
@@ -23,6 +24,7 @@ class ConfigurationOperations {
     this.recoverInterruptedRuns();
     this.ensureJobSchedules();
     this.stalePreviewCleanupPromise = this.clearStalePreviews().catch((error) => this.manager.log(null, 'error', `Could not clean stale previews: ${error.message}`));
+    getRuntimeClient().status().catch(() => {});
     this.timer = setInterval(() => this.tick().catch((error) => this.manager.log(null, 'error', `Operations scheduler failed: ${error.message}`)), JOB_POLL_INTERVAL_MS);
     this.timer.unref?.();
   }
@@ -253,10 +255,12 @@ class ConfigurationOperations {
     const root = siteRoot(site);
     const backend = this.manager.running.get(Number(site.id))?.backend || null;
     if (backend?.driver === 'container') {
-      return runProcess(DOCKER_BIN, ['exec', backend.containerName || backend.containerId, '/bin/sh', '-lc', command], this.trackedProcessOptions({ timeoutMs, onLine }));
+      await getRuntimeClient().containerExec({ name: backend.containerName || backend.containerId, command, timeoutMs, onLine });
+      return { ok: true };
     }
     if (backend?.driver === 'compose') {
-      return runProcess(DOCKER_BIN, ['compose', '-p', backend.composeProject, ...(backend.composeFiles || [backend.composeFile]).flatMap((composeFile) => ['-f', composeFile]), 'exec', '-T', backend.composeService, '/bin/sh', '-lc', command], this.trackedProcessOptions({ cwd: backend.cwd, env: backend.env, timeoutMs, onLine }));
+      await getRuntimeClient().composeExec({ project: backend.composeProject, files: backend.composeFiles || [backend.composeFile], cwd: backend.cwd, env: backend.env, service: backend.composeService, command, timeoutMs, onLine });
+      return { ok: true };
     }
     if (site.runtime_type === 'container' || site.runtime_type === 'compose' || (site.runtime_type === 'node' && site.runtime_isolation === 'docker')) {
       throw new Error('The container runtime must be running before a scheduled or manual site command can execute inside it.');

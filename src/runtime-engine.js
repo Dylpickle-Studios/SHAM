@@ -6,7 +6,7 @@ const net = require('node:net');
 const http = require('node:http');
 const https = require('node:https');
 const { spawn } = require('node:child_process');
-const { DATA_DIR, DOCKER_BIN } = require('./config');
+const { DATA_DIR } = require('./config');
 const { runtimeEnvironment, operatorEnvironment } = require('./process-env');
 
 function runtimeProcessOptions(options = {}) {
@@ -208,33 +208,6 @@ async function createEnvFile(siteId, env) {
   return filename;
 }
 
-async function dockerPort(containerName, containerPort, { retries = 100, timeoutMs = 15_000 } = {}) {
-  const deadline = Date.now() + Math.max(1000, Number(timeoutMs) || 15_000);
-  for (let i = 0; i < retries && Date.now() < deadline; i += 1) {
-    const remaining = Math.max(100, deadline - Date.now());
-    const result = await new Promise((resolve) => {
-      const child = spawn(DOCKER_BIN, ['port', containerName, `${containerPort}/tcp`], { env: operatorEnvironment(), stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
-      let output = '';
-      let settled = false;
-      const finish = (value) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(value);
-      };
-      child.stdout.on('data', (chunk) => { if (output.length < 4096) output += chunk.toString().slice(0, 4096 - output.length); });
-      child.once('error', () => finish(''));
-      child.once('exit', (code) => finish(code === 0 ? output.trim() : ''));
-      const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } finish(''); }, Math.min(1500, remaining));
-      timer.unref?.();
-    });
-    const match = /(?:127\.0\.0\.1|0\.0\.0\.0|\[::\]|::1):(\d+)\s*$/.exec(result.split(/\r?\n/)[0] || '');
-    if (match) return Number(match[1]);
-    await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(0, deadline - Date.now()))));
-  }
-  throw new Error(`Docker did not publish container port ${containerPort} within ${Math.ceil((Number(timeoutMs) || 15_000) / 1000)} seconds.`);
-}
-
 function managedContainerName(siteId, suffix = '') {
   return `sham-site-${Number(siteId)}${suffix ? `-${suffix}` : ''}`.replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 120);
 }
@@ -250,6 +223,5 @@ module.exports = {
   httpProbe,
   waitForReadiness,
   createEnvFile,
-  dockerPort,
   managedContainerName
 };

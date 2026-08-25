@@ -135,8 +135,8 @@ test('site creation hides unsupported Docker, buildpack, Nixpacks, Git, and Anub
   assert.match(app, /element\.hidden = !available/);
   assert.match(app, /element\.disabled = !available/);
   assert.match(operations, /capabilities\(\)/);
-  assert.match(operations, /buildpacks: docker && commandAvailable\(PACK_BIN\)/);
-  assert.match(operations, /nixpacks: docker && commandAvailable\(NIXPACKS_BIN\)/);
+  assert.match(operations, /buildpacks: docker && Boolean\(agentStatus\.buildpacksAvailable\)/);
+  assert.match(operations, /nixpacks: docker && Boolean\(agentStatus\.nixpacksAvailable\)/);
 });
 
 test('documentation and license live in the sidebar and license opens in a modal', () => {

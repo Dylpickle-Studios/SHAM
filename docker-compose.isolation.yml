@@ -1,23 +1,56 @@
-# Optional overlay for Docker-isolated sites and Anubis sidecars.
-# The Docker socket gives SHAM control over containers on the host. Use this
-# only on a dedicated server and never expose the dashboard to untrusted users.
+# Optional overlay for Docker-backed sites, Docker Compose runtimes, and Anubis
+# sidecars. Docker access is granted only to a separate `sham-runtime-agent`
+# container; the `sham` control-plane container never mounts the Docker socket
+# and never talks to Docker directly. `sham` reaches the agent only over a
+# local, authenticated Unix socket inside the shared `/data` volume.
+#
+# The Docker socket still gives whatever holds it control over containers on the host.
+# Isolating that authority behind the agent's narrow, allowlisted RPC surface
+# means a compromise of the
+# internet-facing `sham` container no longer implies direct Docker/root-level
+# host access — but the agent itself remains a privileged component. Run it
+# only on a dedicated host/VM and keep it off any network you do not trust.
+#
 # Before starting, export:
 #   SHAM_DOCKER_HOST_DATA_PATH="$(pwd)/sham-data"
 #   DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)"
 services:
   sham:
     environment:
-      SHAM_DOCKER_HOST_DATA_PATH: ${SHAM_DOCKER_HOST_DATA_PATH:?Set the absolute host path mounted at /data}
       SHAM_DOCKER_INTERNAL_NETWORK: ${SHAM_DOCKER_INTERNAL_NETWORK:-sham-runtime-internal}
       SHAM_DOCKER_EGRESS_NETWORK: ${SHAM_DOCKER_EGRESS_NETWORK:-sham-runtime-egress}
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    group_add:
-      - ${DOCKER_GID:-999}
     networks:
       - default
       - sham_runtime_internal
       - sham_runtime_egress
+    depends_on:
+      - sham-runtime-agent
+
+  sham-runtime-agent:
+    image: ${SHAM_IMAGE:-ghcr.io/dylpickle-studios/sham:latest}
+    build:
+      context: .
+      args:
+        VERSION: 1.1.1
+    container_name: sham-runtime-agent
+    restart: unless-stopped
+    command: ["node", "runtime-agent/index.js"]
+    environment:
+      SHAM_DATA_PATH: /data
+      SHAM_DOCKER_HOST_DATA_PATH: ${SHAM_DOCKER_HOST_DATA_PATH:?Set the absolute host path mounted at /data}
+      SHAM_DOCKER_INTERNAL_NETWORK: ${SHAM_DOCKER_INTERNAL_NETWORK:-sham-runtime-internal}
+      SHAM_DOCKER_EGRESS_NETWORK: ${SHAM_DOCKER_EGRESS_NETWORK:-sham-runtime-egress}
+      NODE_ENV: production
+    volumes:
+      - ./sham-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - ${DOCKER_GID:-999}
+    # No ports, no public/default-network exposure: the agent is reachable
+    # only through the Unix socket it creates under the shared /data volume
+    # (see SHAM_RUNTIME_AGENT_SOCKET / SHAM_RUNTIME_AGENT_TOKEN_PATH in the
+    # configuration reference), which `sham` already mounts at the same path.
+    network_mode: "none"
 
 networks:
   sham_runtime_internal:

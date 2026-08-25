@@ -40,6 +40,7 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY --from=cloudflared /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 COPY package.json ./
 COPY src ./src
+COPY runtime-agent ./runtime-agent
 COPY public ./public
 COPY examples ./examples
 COPY README.md LICENSE ./

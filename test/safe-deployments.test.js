@@ -36,12 +36,18 @@ test('backup credentials are masked in API payloads and preserved on blank updat
 test('Anubis sidecars are pinned, resource-limited, and use host-visible mounts', () => {
   const source = read('src/operations-manager.js');
   const config = read('src/config.js');
+  const agentDocker = read('runtime-agent/docker.js');
   assert.match(config, /ghcr\.io\/techarohq\/anubis:v1\.26\.2/);
-  assert.match(source, /dockerHostPath\(policyPath\)/);
-  assert.match(source, /SHAM_DOCKER_HOST_DATA_PATH/);
-  assert.match(source, /'--memory', '256m'/);
-  assert.match(source, /'--cpus', '1'/);
-  assert.match(source, /'--pids-limit', '128'/);
+  assert.match(source, /client\.sidecarRun\(/);
+  assert.match(source, /policyFile: policyPath/);
+  // Only the agent resolves container mount sources to host-visible paths,
+  // and only ever for its own pinned ANUBIS_IMAGE (never a caller-supplied one).
+  assert.match(agentDocker, /hostBindPath\(params\.policyFile\)/);
+  assert.match(agentDocker, /SHAM_DOCKER_HOST_DATA_PATH/);
+  assert.match(agentDocker, /ANUBIS_IMAGE\]/);
+  assert.match(agentDocker, /'--memory', '256m'/);
+  assert.match(agentDocker, /'--cpus', '1'/);
+  assert.match(agentDocker, /'--pids-limit', '128'/);
   assert.match(source, /this\.anubisPolicy\(site, metricsPort\)/);
   assert.match(source, /metrics:\\n  bind: \\\"127\.0\.0\.1:\$\{metricsPort\}\\\"/);
   assert.doesNotMatch(source, /METRICS_BIND=/);
@@ -49,14 +55,17 @@ test('Anubis sidecars are pinned, resource-limited, and use host-visible mounts'
 
 test('Docker isolation keeps native host ingress and uses shared networks for a containerized control plane', () => {
   const source = read('src/site-manager.js');
+  const agentDocker = read('runtime-agent/docker.js');
   const config = read('src/config.js');
   const overlay = read('docker-compose.isolation.yml');
   assert.match(config, /SHAM_DOCKER_INTERNAL_NETWORK/);
   assert.match(config, /SHAM_DOCKER_EGRESS_NETWORK/);
-  assert.match(source, /network', 'create', '--driver', 'bridge', '--internal'/);
-  assert.match(source, /args\.push\('-p', `127\.0\.0\.1:\$\{internalPort\}:\$\{internalPort\}`\)/);
+  // The control plane only decides which network a runtime should join; the
+  // privileged agent is the only process that ever runs `docker network create`.
+  assert.match(agentDocker, /'network', 'create', '--driver', 'bridge', '--label', MANAGED_LABEL/);
+  assert.match(agentDocker, /if \(internal\) args\.push\('--internal'\)/);
   assert.match(source, /const network = site\.outbound_network \? DOCKER_EGRESS_NETWORK : DOCKER_INTERNAL_NETWORK/);
-  assert.match(source, /internalHost = dockerContainerName\(site\.id\)/);
+  assert.match(source, /internalHost = name/);
   assert.match(overlay, /internal: true/);
   assert.match(overlay, /sham_runtime_egress/);
   assert.doesNotMatch(source, /args\.push\('--network', 'none'\)/);
@@ -153,9 +162,11 @@ test('operations readiness reports actual Docker prerequisites and documents dep
   const app = read('public/app.js');
   const readme = read('README.md');
   assert.match(operations, /function commandAvailable\(command\)/);
-  assert.match(operations, /dockerBinaryAvailable/);
-  assert.match(operations, /dockerSocketAvailable/);
-  assert.match(operations, /dockerHostPathConfigured/);
+  // Docker capability flags now come from the Runtime Agent's own status
+  // report rather than probing the (no longer present) local Docker socket.
+  assert.match(operations, /agentReachable/);
+  assert.match(operations, /agentAuthenticated/);
+  assert.match(operations, /dockerAvailable/);
   assert.match(app, /capabilities\.dockerReason/);
   assert.match(readme, /X-Hub-Signature-256/);
   assert.match(readme, /X-SHAM-Signature/);

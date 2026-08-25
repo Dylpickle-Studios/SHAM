@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node src/bootstrap.js",
     "dev": "node --watch src/server.js",
+    "runtime-agent": "node runtime-agent/index.js",
     "check": "node scripts/check-syntax.js",
     "test": "node --test test/*.test.js",
     "security": "npm audit --omit=dev --audit-level=high",

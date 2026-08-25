@@ -153,7 +153,7 @@ test('license and categorized documentation are included in the source release a
   assert.match(core, /\['Dashboard & UI', 'dashboard'\]/);
   assert.match(core, /\['Configuration', 'config'\]/);
   assert.match(core, /\['Troubleshooting', 'troubleshooting'\]/);
-  assert.match(updater, /'bin', 'docs'/);
+  assert.match(updater, /'bin', 'runtime-agent', 'docs'/);
 });
 
 test('dashboard HTML has unique IDs and label targets resolve', () => {

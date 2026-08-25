@@ -162,7 +162,9 @@ test('runtime promotion, reconciliation, and container cleanup stay transactiona
   assert.match(source, /async promoteCandidate\([\s\S]*?const old = runtime\?\.backend \|\| null[\s\S]*?catch \(error\)[\s\S]*?runtime\.backend = old[\s\S]*?stopBackend\(backend\)/);
   assert.match(source, /async rollbackPromotion\([\s\S]*?if \(!old\)[\s\S]*?DELETE FROM runtime_instances[\s\S]*?stopBackend\(candidate\.backend\)/);
   assert.match(source, /terminateReconciledProcess/);
-  assert.match(source, /managedImage[\s\S]*?image', 'rm', '-f'/);
+  assert.match(source, /managedImage[\s\S]*?client\.removeImage/);
+  const agentDocker = fs.readFileSync(path.join(__dirname, '..', 'runtime-agent', 'docker.js'), 'utf8');
+  assert.match(agentDocker, /image', 'rm', '-f'/);
 });
 
 test('Compose runtime validation rejects unmanaged exposure and enforces no-egress overrides', () => {
@@ -171,7 +173,12 @@ test('Compose runtime validation rejects unmanaged exposure and enforces no-egre
   assert.match(source, /cannot use host bind mounts\. Use named volumes instead/);
   assert.match(source, /cannot be external; SHAM-managed projects must not attach unmanaged Docker resources/);
   assert.match(source, /runtimeOverride\.networks = Object\.fromEntries\([\s\S]*internal: true/);
-  assert.match(source, /rejectOutputOverflow: true/);
+  // The privileged agent re-runs these same validators (defense in depth) and
+  // is the process that actually invokes `docker compose config`.
+  const agentDocker = fs.readFileSync(path.join(__dirname, '..', 'runtime-agent', 'docker.js'), 'utf8');
+  assert.match(agentDocker, /rejectOutputOverflow: true/);
+  assert.match(agentDocker, /validateComposeProjectPaths\(config, root\)/);
+  assert.match(agentDocker, /composeRuntimePolicy\(config, service/);
 });
 
 test('scheduled jobs target the active runtime instead of stale fixed container names', () => {
