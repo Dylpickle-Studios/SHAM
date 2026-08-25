@@ -24,6 +24,10 @@ function waitFor(predicate, timeoutMs = 5000) {
 }
 
 async function startAgent() {
+  // Some archive/check-out paths discard executable bits. The runtime agent
+  // intentionally executes its configured Docker binary, so make the test
+  // fixture's contract explicit instead of relying on checkout metadata.
+  fs.chmodSync(FAKE_DOCKER, 0o755);
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sham-agent-data-'));
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sham-agent-tmp-'));
   const socketPath = path.join(dataDir, 'agent.sock');

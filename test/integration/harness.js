@@ -188,6 +188,10 @@ class ShamHarness {
   async publishFixture(name, message = name) {
     await fs.rm(this.gitWorktree, { recursive: true, force: true });
     await run('git', ['clone', this.gitBare, this.gitWorktree]);
+    // Each fixture revision is a real commit. Configure its identity locally
+    // so the test remains self-contained on fresh CI runners.
+    await run('git', ['config', 'user.email', 'integration@example.test'], { cwd: this.gitWorktree });
+    await run('git', ['config', 'user.name', 'SHAM integration'], { cwd: this.gitWorktree });
     await fs.cp(path.join(FIXTURES, name), this.gitWorktree, { recursive: true });
     await run('git', ['add', '.'], { cwd: this.gitWorktree });
     await run('git', ['commit', '-m', message], { cwd: this.gitWorktree });

@@ -25,6 +25,9 @@ function waitFor(predicate, timeoutMs = 5000) {
 }
 
 async function startAgent() {
+  // Keep this fake CLI executable even when the checkout mechanism strips
+  // tracked executable bits (for example, an extracted source archive).
+  fs.chmodSync(FAKE_DOCKER, 0o755);
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sham-client-data-'));
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sham-client-tmp-'));
   const socketPath = path.join(dataDir, 'agent.sock');
