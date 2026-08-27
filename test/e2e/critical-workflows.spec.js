@@ -28,7 +28,7 @@ async function openWorkspace(page) {
   await page.getByRole('button', { name: 'Sites' }).click();
   const card = page.locator('.site-card').filter({ hasText: siteName });
   await expect(card).toBeVisible();
-  await card.getByRole('button', { name: siteName }).click();
+  await card.getByRole('button', { name: siteName, exact: true }).click();
   await expect(page.locator('#section-site-workspace')).toBeVisible();
 }
 
@@ -76,6 +76,7 @@ test('an administrator creates and deploys a Git-backed Node site through the UI
   await page.getByRole('button', { name: 'Continue' }).click();
   await page.locator('#site-name').fill(siteName);
   await page.locator('#site-domain').fill(siteDomain);
+  await page.locator('#site-enabled').check();
   // The Node preset correctly defaults to `npm ci`. This fixture has no
   // dependencies or package manifest, so exercise the UI's explicit
   // no-install configuration rather than requiring a registry in CI.

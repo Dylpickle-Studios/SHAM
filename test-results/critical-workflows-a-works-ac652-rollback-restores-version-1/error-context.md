@@ -6,23 +6,48 @@
 
 # Test info
 
-- Name: critical-workflows.spec.js >> an administrator creates and deploys a Git-backed Node site through the UI
-- Location: test/e2e/critical-workflows.spec.js:69:1
+- Name: critical-workflows.spec.js >> a workspace deployment switches traffic to version 2 and rollback restores version 1
+- Location: test/e2e/critical-workflows.spec.js:116:1
 
 # Error details
 
 ```
 Error: Expected SHAM_TEST_VERSION_1 through SHAM edge proxy.
-(node:2438157) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(node:2450267) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
 (Use `node --trace-warnings ...` to show where the warning was created)
-SHAM dashboard listening on http://127.0.0.1:42595
-SHAM data path: /tmp/sham-integration-oa5m6i
+SHAM dashboard listening on http://127.0.0.1:40527
+SHAM data path: /tmp/sham-integration-Uy85Ag
 [site:1] Deployment queued.
-[site:1] git: Cloning into '/tmp/sham-integration-oa5m6i/sites/site-d887bd2c-71cf-4feb-9b25-0cf646c5197f.git-1a15415c-b3de-49c5-8671-56ec8108bc67'...
+[site:1] git: Cloning into '/tmp/sham-integration-Uy85Ag/sites/site-d71ad32e-8759-48af-b52b-e6314747e3d0.git-55b5e09d-9148-44d0-8d65-5613e3581ff5'...
 [site:1] git: fatal: dumb http transport does not support shallow capabilities
 [site:1] Git remote does not support shallow clones; retrying a full clone.
-[site:1] git: Cloning into '/tmp/sham-integration-oa5m6i/sites/site-d887bd2c-71cf-4feb-9b25-0cf646c5197f.git-1a15415c-b3de-49c5-8671-56ec8108bc67'...
-[site:1] Build completed for 85c446dce; activating release.
+[site:1] git: Cloning into '/tmp/sham-integration-Uy85Ag/sites/site-d71ad32e-8759-48af-b52b-e6314747e3d0.git-55b5e09d-9148-44d0-8d65-5613e3581ff5'...
+[site:1] Build completed for aa3d1795f; activating release.
+[site:1] Deployment activated successfully.
+[site:1] Started browser-site (process/node) on 127.0.0.1:4100
+(node:2450267) [DEP0060] DeprecationWarning: The `util._extend` API is deprecated. Please use Object.assign() instead.
+[site:1] node: fixture SHAM_TEST_VERSION_1 GET /
+[site:1] node: fixture SHAM_TEST_VERSION_1 GET /
+[site:1] Stopped site
+[site:1] Started browser-site (process/node) on 127.0.0.1:4100
+[site:1] node: fixture SHAM_TEST_VERSION_1 GET /
+[site:1] Stopped site
+[site:1] Started browser-site (process/node) on 127.0.0.1:4100
+[site:1] node: fixture SHAM_TEST_VERSION_1 GET /
+[site:1] node: fixture SHAM_TEST_VERSION_1 GET /
+[site:1] Deployment queued.
+[site:1] git: Cloning into '/tmp/sham-integration-Uy85Ag/sites/site-d71ad32e-8759-48af-b52b-e6314747e3d0.git-9592806b-78e9-4f1a-a14d-1032ae085
+[site:1] git: 1b8'...
+[site:1] node: fixture SHAM_TEST_VERSION_1 GET /
+[site:1] git: fatal: dumb http transport does not support shallow capabilities
+[site:1] Git remote does not support shallow clones; retrying a full clone.
+[site:1] git: Cloning into '/tmp/sham-integration-Uy85Ag/sites/site-d71ad32e-8759-48af-b52b-e6314747e3d0.git-9592806b-78e9-4f1a-a14d-1032ae0851b8'...
+[site:1] node: fixture SHAM_TEST_VERSION_1 GET /
+[site:1] Build completed for 032c1ebd2; activating release.
+[site:1] Starting release candidate from its stable release path and waiting for readiness before traffic switch.
+[site:1] node: fixture SHAM_TEST_VERSION_1 GET /
+[site:1] node: fixture SHAM_TEST_VERSION_2 GET /
+[site:1] node: fixture SHAM_TEST_VERSION_2 GET /
 [site:1] Deployment activated successfully.
 
 ```
