@@ -18,7 +18,7 @@ const DEFAULT_UPGRADE_FROM = 'v1.1.1';
 async function repairKnownBaselinePackagingDefect(checkout, tag) {
   const corePath = path.join(checkout, 'src', 'sites', 'core.js');
   const compatibilityPath = path.join(checkout, 'src', 'sites', 'config.js');
-  let source = '';
+  let source;
   try { source = await fs.readFile(corePath, 'utf8'); }
   catch { return []; }
   if (!source.includes("require('./config')")) return [];
