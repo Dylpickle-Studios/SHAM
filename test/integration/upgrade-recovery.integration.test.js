@@ -18,7 +18,12 @@ async function supportedReleaseCheckout() {
     .split(/\r?\n/)
     .map((tag) => tag.trim())
     .filter((tag) => /^v?\d+\.\d+\.\d+$/.test(tag));
-  const tag = requested || tags[0];
+  // Current main can legitimately carry the same version as its latest
+  // release tag while preparing a patch/release candidate. Upgrade from the
+  // most recent *predecessor* stable release in that case, not the tag which
+  // represents the code being tested.
+  const currentVersion = require(path.join(ROOT, 'package.json')).version;
+  const tag = requested || tags.find((candidate) => candidate.replace(/^v/, '') !== currentVersion);
   if (!tag) {
     await fs.rm(checkout, { recursive: true, force: true });
     return null;

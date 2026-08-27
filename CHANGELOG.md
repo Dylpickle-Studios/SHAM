@@ -4,6 +4,25 @@ All notable public changes to SHAM are documented here. The project follows Sema
 
 ## [Unreleased]
 
+## [1.1.2] — 2026-08-27
+
+### Security
+
+- Runtime Agent RPC now rejects unknown request properties before any Docker
+  operation runs, preventing privileged Docker options from being silently
+  ignored or smuggled through the control-plane boundary.
+
+### Changed
+
+- Added the supported `/api/v1` automation namespace with structured errors,
+  an OpenAPI 3.1 contract, and documented compatibility policy. Existing
+  `/api` endpoints remain compatibility aliases.
+- Upgrade verification now uses the latest predecessor stable release tag (or
+  `SHAM_UPGRADE_FROM`) and installs that release's locked dependencies before
+  testing migration, reconciliation, secret preservation, and rollback.
+- Integration, browser, Compose, backup/restore, and release-hygiene checks
+  now provide stronger failure diagnostics and deterministic fixture setup.
+
 ## [1.1.1] — 2026-08-14
 
 ### Added
