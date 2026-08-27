@@ -34,9 +34,10 @@ service plus an internal-only dependency, proxy routing, reconciliation, site
 cleanup, and rejection of prohibited host-level Compose features.
 
 The same serial suite also runs two recovery drills. The upgrade drill archives
-the latest predecessor stable Git tag (or `SHAM_UPGRADE_FROM=<tag>`), installs
-that release's own locked dependencies, starts it with isolated data, deploys
-a Git application and secret, then starts current SHAM against that same data.
+the supported `v1.0.0` public stable baseline (or an explicit
+`SHAM_UPGRADE_FROM=<tag>`), installs that release's own locked dependencies,
+starts it with isolated data, deploys a Git application and secret, then starts
+current SHAM against that same data.
 It verifies database startup/migrations, Runtime Agent token creation, running
 traffic, encrypted environment data, release history, and rollback. CI fetches
 the full tag history and requires a stable baseline. The restore drill

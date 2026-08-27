@@ -117,9 +117,8 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7.0.1
         with:
-          # Upgrade coverage archives the immediately preceding pre-agent
-          # source revision and boots it against isolated state.
-          # The upgrade drill runs an actual stable release tag, not HEAD^.
+          # The upgrade drill archives the v1.0.0 public stable release and
+          # boots it against isolated state before upgrading to this checkout.
           fetch-depth: 0
 
       - name: Set up Node.js
@@ -134,6 +133,7 @@ jobs:
       - name: Run real deployment lifecycle and Compose tests
         env:
           SHAM_REQUIRE_UPGRADE_BASELINE: '1'
+          SHAM_UPGRADE_FROM: v1.0.0
         run: npm run test:integration
 
       - name: Collect Docker diagnostics on failure

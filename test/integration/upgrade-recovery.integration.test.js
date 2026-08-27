@@ -9,28 +9,22 @@ const Database = require('better-sqlite3');
 const { ShamHarness, ROOT, run, waitFor } = require('./harness');
 
 const enabled = process.env.SHAM_RUN_INTEGRATION === '1';
+// v1.0.0 is SHAM's first public stable release and deliberately predates the
+// Runtime Agent split. Keeping the baseline explicit makes this a real,
+// repeatable compatibility contract rather than an accidental choice based on
+// local tag ordering. Set SHAM_UPGRADE_FROM to exercise another supported
+// source release when preparing a future compatibility release.
+const DEFAULT_UPGRADE_FROM = 'v1.0.0';
 
 async function supportedReleaseCheckout() {
   const checkout = await fs.mkdtemp(path.join(os.tmpdir(), 'sham-upgrade-baseline-'));
   const archive = path.join(checkout, 'baseline.tar');
   const requested = String(process.env.SHAM_UPGRADE_FROM || '').trim();
-  const tags = (await run('git', ['tag', '--merged', 'HEAD', '--sort=-v:refname'], { cwd: ROOT })).stdout
-    .split(/\r?\n/)
-    .map((tag) => tag.trim())
-    .filter((tag) => /^v?\d+\.\d+\.\d+$/.test(tag));
-  // Current main can legitimately carry the same version as its latest
-  // release tag while preparing a patch/release candidate. Upgrade from the
-  // most recent *predecessor* stable release in that case, not the tag which
-  // represents the code being tested.
-  const currentVersion = require(path.join(ROOT, 'package.json')).version;
-  const tag = requested || tags.find((candidate) => candidate.replace(/^v/, '') !== currentVersion);
-  if (!tag) {
-    await fs.rm(checkout, { recursive: true, force: true });
-    return null;
-  }
+  const tag = requested || DEFAULT_UPGRADE_FROM;
   try { await run('git', ['rev-parse', '--verify', `${tag}^{commit}`], { cwd: ROOT }); }
   catch (error) {
     await fs.rm(checkout, { recursive: true, force: true });
+    if (!requested && process.env.SHAM_REQUIRE_UPGRADE_BASELINE !== '1') return null;
     throw new Error(`SHAM_UPGRADE_FROM=${tag} is not an available stable release tag. Fetch tags or set SHAM_UPGRADE_FROM to a supported tag.`);
   }
   const ref = (await run('git', ['rev-parse', `${tag}^{commit}`], { cwd: ROOT })).stdout.trim();
@@ -68,18 +62,14 @@ test('upgrade from the last supported stable release preserves releases, secrets
   try {
     await sham.start();
     await sham.useSmartGitHttp();
-    // Keep the baseline runtime stopped while recording its state. The tagged
-    // release predates the sites/ module-layout migration, so starting its
-    // Node gateway is not a valid prerequisite for proving that its persisted
-    // data upgrades correctly. Its real API still creates the site, encrypts
-    // secrets, and builds immutable Git releases; current SHAM must reconcile
-    // and start that exact state after upgrade.
-    const site = await sham.createNodeSite({ name: 'upgrade-site', domain: 'upgrade.integration.test', enabled: false });
+    const site = await sham.createNodeSite({ name: 'upgrade-site', domain: 'upgrade.integration.test' });
+    await sham.waitForEdge(site.domain, 'SHAM_TEST_VERSION_1');
     await sham.request(`/api/sites/${site.id}/environment`, {
       method: 'PUT', body: { variables: [{ key: 'RECOVERY_SECRET', value: 'upgrade-secret-value', secret: true, scope: 'runtime' }] }
     });
     await sham.publishFixture('node-v2', 'upgrade version 2');
     await sham.deployGit(site);
+    await sham.waitForEdge(site.domain, 'SHAM_TEST_VERSION_2');
     const before = await sham.request(`/api/sites/${site.id}/deployments?limit=20`);
     assert.ok(before.deployments.length >= 2, 'baseline must create deployment history');
     await assert.rejects(fs.access(path.join(sham.dataDir, 'runtime-agent', 'agent.token')));
@@ -88,7 +78,6 @@ test('upgrade from the last supported stable release preserves releases, secrets
     await sham.restartSham();
     await sham.startRuntimeAgent();
     await fs.access(path.join(sham.dataDir, 'runtime-agent', 'agent.token'));
-    await sham.request(`/api/sites/${site.id}/start`, { method: 'POST', body: {} });
     await sham.waitForEdge(site.domain, 'SHAM_TEST_VERSION_2');
     const revealed = await sham.request(`/api/sites/${site.id}/environment/RECOVERY_SECRET/reveal`, {
       method: 'POST', body: { password: 'integration-password-123!' }
