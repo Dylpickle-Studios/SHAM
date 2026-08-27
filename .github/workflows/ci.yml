@@ -57,7 +57,10 @@ jobs:
 
       - name: Read package version
         id: package
-        run: echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build local image
         uses: docker/build-push-action@v7.3.0

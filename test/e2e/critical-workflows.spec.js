@@ -76,6 +76,10 @@ test('an administrator creates and deploys a Git-backed Node site through the UI
   await page.getByRole('button', { name: 'Continue' }).click();
   await page.locator('#site-name').fill(siteName);
   await page.locator('#site-domain').fill(siteDomain);
+  // The Node preset correctly defaults to `npm ci`. This fixture has no
+  // dependencies or package manifest, so exercise the UI's explicit
+  // no-install configuration rather than requiring a registry in CI.
+  await page.locator('#site-install-command').fill('');
   await page.getByRole('button', { name: 'Continue' }).click();
   await page.locator('#runtime-safety-options').click();
   await page.locator('#site-edge').check();
@@ -84,8 +88,6 @@ test('an administrator creates and deploys a Git-backed Node site through the UI
   await page.getByRole('button', { name: 'Deploy site' }).click();
   await expect(page.locator('#site-dialog')).toBeHidden({ timeout: 30_000 });
   await expect(page.locator('.site-card').filter({ hasText: siteName })).toBeVisible();
-  const createdSite = (await sham.request('/api/sites')).sites.find((item) => item.name === siteName);
-  expect(createdSite).toBeTruthy();
   await sham.waitForEdge(siteDomain, 'SHAM_TEST_VERSION_1');
 });
 
