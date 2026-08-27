@@ -246,12 +246,12 @@ class ShamHarness {
     this.gitUrl = `http://127.0.0.1:${this.gitServer.address().port}/fixture.git`;
   }
 
-  async createNodeSite({ name = 'integration-node', domain = 'node.integration.test' } = {}) {
+  async createNodeSite({ name = 'integration-node', domain = 'node.integration.test', enabled = true } = {}) {
     const sitePort = await freePort();
     const result = await this.request('/api/sites', {
       method: 'POST',
       body: {
-        name, port: sitePort, runtimeType: 'node', nodeEntry: 'server.js', enabled: true,
+        name, port: sitePort, runtimeType: 'node', nodeEntry: 'server.js', enabled,
         edgeEnabled: true, domain, gitUrl: this.gitUrl, gitBranch: 'main', source: 'git',
         readinessType: 'http', readinessPath: '/health', healthCheckType: 'http', healthCheckPath: '/health',
         startupTimeoutSeconds: 3, blueGreenDrainSeconds: 0
