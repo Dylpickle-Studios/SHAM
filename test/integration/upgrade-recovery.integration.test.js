@@ -18,21 +18,22 @@ const DEFAULT_UPGRADE_FROM = 'v1.1.1';
 async function repairKnownBaselinePackagingDefect(checkout, tag) {
   const corePath = path.join(checkout, 'src', 'sites', 'core.js');
   const compatibilityPath = path.join(checkout, 'src', 'sites', 'config.js');
-  let source;
-  try { source = await fs.readFile(corePath, 'utf8'); }
-  catch { return []; }
-  if (!source.includes("require('./config')")) return [];
+  const repairs = [];
   try {
-    await fs.access(compatibilityPath);
-    return [];
-  } catch {
-    // The v1.1.1 tag contains a bad relative import in src/sites/core.js.
-    // Repair only module resolution in the disposable checkout so the actual
-    // tagged database/runtime code can create representative pre-upgrade
-    // state. No migration or persisted data is altered by this shim.
-    await fs.writeFile(compatibilityPath, "'use strict';\nmodule.exports = require('../config');\n", { flag: 'wx' });
-    return [`${tag}:src/sites/config.js`];
-  }
+    const source = await fs.readFile(corePath, 'utf8');
+    if (source.includes("require('./config')")) {
+      try { await fs.access(compatibilityPath); }
+      catch {
+        // The v1.1.1 tag contains a bad relative import in src/sites/core.js.
+        await fs.writeFile(compatibilityPath, "'use strict';\nmodule.exports = require('../config');\n", { flag: 'wx' });
+        repairs.push(`${tag}:src/sites/config.js`);
+      }
+    }
+  } catch { /* A differently structured override tag needs no core repair. */ }
+
+  // These repairs only make the disposable tagged checkout executable. They
+  // do not replace or alter its database/runtime migrations or persisted data.
+  return repairs;
 }
 
 async function supportedReleaseCheckout() {
@@ -86,13 +87,16 @@ test('upgrade from the last supported stable release preserves releases, secrets
     await sham.start();
     await sham.useSmartGitHttp();
     const site = await sham.createNodeSite({ name: 'upgrade-site', domain: 'upgrade.integration.test' });
-    await sham.waitForEdge(site.domain, 'SHAM_TEST_VERSION_1');
+    // v1.1.1's edge proxy omits a shared requestHostname export. Verify the
+    // tagged runtime through its real site listener before upgrading; after
+    // current SHAM reconciles the state, traffic is verified through the edge.
+    await sham.waitForSite(site.port, 'SHAM_TEST_VERSION_1');
     await sham.request(`/api/sites/${site.id}/environment`, {
       method: 'PUT', body: { variables: [{ key: 'RECOVERY_SECRET', value: 'upgrade-secret-value', secret: true, scope: 'runtime' }] }
     });
     await sham.publishFixture('node-v2', 'upgrade version 2');
     await sham.deployGit(site);
-    await sham.waitForEdge(site.domain, 'SHAM_TEST_VERSION_2');
+    await sham.waitForSite(site.port, 'SHAM_TEST_VERSION_2');
     const before = await sham.request(`/api/sites/${site.id}/deployments?limit=20`);
     assert.ok(before.deployments.length >= 2, 'baseline must create deployment history');
     await assert.rejects(fs.access(path.join(sham.dataDir, 'runtime-agent', 'agent.token')));

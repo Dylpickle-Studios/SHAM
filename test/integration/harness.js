@@ -289,6 +289,25 @@ class ShamHarness {
     });
   }
 
+  async siteText(port) {
+    return new Promise((resolve, reject) => {
+      const request = http.request({ host: '127.0.0.1', port, path: '/' }, (response) => {
+        const chunks = [];
+        response.on('data', (chunk) => chunks.push(chunk));
+        response.once('end', () => resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+      request.once('error', reject);
+      request.end();
+    });
+  }
+
+  async waitForSite(port, expected) {
+    await waitFor(async () => {
+      const response = await this.siteText(port);
+      return response.status === 200 && response.body.includes(expected);
+    }, { timeoutMs: 20_000, message: `Expected ${expected} from SHAM site listener on port ${port}.\n${this.output.slice(-4000)}` });
+  }
+
   async waitForEdge(domain, expected) {
     return waitFor(async () => {
       const response = await this.edgeText(domain);
