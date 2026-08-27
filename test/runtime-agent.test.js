@@ -171,14 +171,26 @@ test('runtime agent: input validation blocks dangerous or malformed operation ta
     });
   }
 
-  await t.test('unexpected extra fields (e.g. attempting to smuggle a privileged flag) are ignored, not honored', async () => {
+  await t.test('unexpected privileged Docker fields are rejected before a container is launched', async () => {
     const res = await rawRequest(agent.socketPath, {
       path: '/v1/containers/run',
       token: agent.token,
       body: { name: 'sham-site-1-run', image: 'node:22', siteId: 1, privileged: true, capAdd: ['SYS_ADMIN'], networkMode: 'host' }
     });
-    assert.equal(res.statusCode, 200);
-    assert.ok(res.json.containerId);
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.json.error.code, 'INVALID_REQUEST');
+    assert.match(res.json.error.message, /Unexpected request fields: privileged, capAdd, networkMode/);
+  });
+
+  await t.test('every POST operation rejects unknown request fields before operation validation', async () => {
+    const { OPERATIONS } = require('../src/runtime/protocol');
+    for (const operation of Object.values(OPERATIONS)) {
+      if (operation.method !== 'POST') continue;
+      const res = await rawRequest(agent.socketPath, { path: operation.path, token: agent.token, body: { unexpected: true } });
+      assert.equal(res.statusCode, 400, `${operation.path} must reject an unknown property`);
+      assert.equal(res.json.error.code, 'INVALID_REQUEST');
+      assert.match(res.json.error.message, /Unexpected request field/);
+    }
   });
 });
 

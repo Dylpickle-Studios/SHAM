@@ -1,10 +1,3 @@
-// @ts-nocheck -- not part of this session's checkJs rollout yet.
-// This file still has genuine `tsc --noEmit` findings (mostly narrow
-// `let x = null`-style inference and untyped Express handlers, the same
-// patterns already fixed across most of src/) that need real per-file
-// JSDoc work to resolve, not a suppression. Tracked as follow-up work;
-// see tsconfig.json and docs/development.md. Do not add more files here
-// without a similar comment and a plan to remove it.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -68,7 +61,9 @@ function listSiteFiles(site, limit = 5000) {
 
   const pending = [{ directory: root, prefix: '' }];
   while (pending.length) {
-    const { directory, prefix } = pending.pop();
+    const next = pending.pop();
+    if (!next) continue;
+    const { directory, prefix } = next;
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) continue;
       const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
@@ -92,7 +87,9 @@ async function listSiteFilesAsync(site, limit = 5000) {
 
   const pending = [{ directory: root, prefix: '' }];
   while (pending.length) {
-    const { directory, prefix } = pending.pop();
+    const next = pending.pop();
+    if (!next) continue;
+    const { directory, prefix } = next;
     let entries;
     try { entries = await fs.promises.readdir(directory, { withFileTypes: true }); }
     catch (error) {

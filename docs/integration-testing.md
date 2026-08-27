@@ -34,11 +34,12 @@ service plus an internal-only dependency, proxy routing, reconciliation, site
 cleanup, and rejection of prohibited host-level Compose features.
 
 The same serial suite also runs two recovery drills. The upgrade drill archives
-the preceding pre-Runtime-Agent source revision, starts it with isolated data,
-deploys a Git application and secret, then starts current SHAM against that
-same data. It verifies database startup/migrations, Runtime Agent token
-creation, running traffic, encrypted environment data, release history, and
-rollback. CI fetches the parent revision for this purpose. The restore drill
+the latest supported stable Git tag (or `SHAM_UPGRADE_FROM=<tag>`), installs
+that release's own locked dependencies, starts it with isolated data, deploys
+a Git application and secret, then starts current SHAM against that same data.
+It verifies database startup/migrations, Runtime Agent token creation, running
+traffic, encrypted environment data, release history, and rollback. CI fetches
+the full tag history and requires a stable baseline. The restore drill
 creates a local archive through the authenticated API, validates it with the
 production archive verifier, deletes the site, stages the authenticated
 restore, restarts SHAM, checks SQLite, release files, secret decryption,

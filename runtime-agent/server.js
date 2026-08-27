@@ -37,6 +37,38 @@ const ROUTES = {
   CLEANUP_MANAGED_IMAGES: { fn: docker.cleanupManagedImages, describe: () => ({}) }
 };
 
+// The Runtime Agent is the Docker privilege boundary.  Do not let callers
+// smuggle Docker options through object destructuring: every request body is
+// an exact, operation-specific schema.  Optional properties may be omitted,
+// but unknown ones are always rejected before Docker is invoked.
+const BODY_FIELDS = Object.freeze({
+  IMAGES_BUILD: ['tag', 'contextPath', 'mode', 'dockerfilePath', 'builder'],
+  IMAGES_REMOVE: ['tag'],
+  CONTAINERS_RUN: ['name', 'image', 'siteId', 'network', 'env', 'dataMount', 'namedVolume', 'memoryMb', 'cpuLimit', 'pidsLimit', 'command', 'ports'],
+  CONTAINERS_STOP: ['name', 'timeoutSec'],
+  CONTAINERS_REMOVE: ['name'],
+  CONTAINERS_PORT: ['name', 'containerPort', 'timeoutMs'],
+  CONTAINERS_LOGS: ['name'],
+  CONTAINERS_WAIT: ['name'],
+  CONTAINERS_EXEC: ['name', 'command', 'timeoutMs'],
+  CONTAINERS_STATS: ['id'],
+  CONTAINERS_SANDBOX_RUN: ['image', 'envFile', 'workspaceSource', 'command', 'timeoutMs'],
+  CONTAINERS_SIDECAR_RUN: ['name', 'policyFile', 'port', 'targetPort', 'difficulty', 'domain', 'networkMode'],
+  CONTAINERS_SIDECAR_REMOVE: ['name'],
+  NETWORKS_ENSURE: ['name', 'internal'],
+  NETWORKS_CONNECT: ['network', 'containerId', 'alias'],
+  COMPOSE_CONFIG: ['files', 'cwd', 'env', 'service', 'containerPort'],
+  COMPOSE_UP: ['project', 'files', 'cwd', 'env', 'service', 'containerPort'],
+  COMPOSE_PS: ['project', 'files', 'cwd', 'env', 'service'],
+  COMPOSE_PORT: ['project', 'files', 'cwd', 'env', 'service', 'containerPort'],
+  COMPOSE_DOWN: ['project', 'files', 'cwd', 'env'],
+  COMPOSE_EXEC: ['project', 'files', 'cwd', 'env', 'service', 'command', 'timeoutMs'],
+  CLEANUP_COMPOSE_PROJECT: ['project', 'file', 'cwd'],
+  CLEANUP_ORPHANED_COMPOSE_PROJECT: ['project'],
+  CLEANUP_MANAGED_CONTAINERS: [],
+  CLEANUP_MANAGED_IMAGES: []
+});
+
 const ROUTE_BY_METHOD_PATH = new Map();
 for (const [key, definition] of Object.entries(ROUTES)) {
   const operation = OPERATIONS[key];
@@ -62,6 +94,12 @@ function sendJson(res, statusCode, body) {
 
 function sendError(res, statusCode, code, message) {
   sendJson(res, statusCode, { error: { code, message: sanitizeMessage(message) } });
+}
+
+function assertExactRequestFields(routeKey, body) {
+  const allowed = new Set(BODY_FIELDS[routeKey] || []);
+  const unexpected = Object.keys(body).filter((key) => !allowed.has(key));
+  if (unexpected.length) throw new ValidationError(`Unexpected request field${unexpected.length === 1 ? '' : 's'}: ${unexpected.join(', ')}.`);
 }
 
 function readBody(req) {
@@ -122,6 +160,13 @@ async function handleRequest(req, res, { token }) {
 
   const describe = route.describe ? route.describe(body) : {};
   const logEvent = route.key.toLowerCase().replace(/_/g, '.');
+
+  try { assertExactRequestFields(route.key, body); }
+  catch (error) {
+    const [statusCode, code] = errorStatusAndCode(error);
+    sendError(res, statusCode, code, error.message);
+    return;
+  }
 
   if (!route.stream) {
     try {

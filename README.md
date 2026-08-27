@@ -44,7 +44,7 @@ The root README is intentionally an overview. The detailed manual is split by ta
 - **[Runtimes and Docker](docs/runtimes-and-docker.md)** — process/container/Compose drivers, existing images, Dockerfiles, Buildpacks, Nixpacks, health probes, and runtime security.
 - **[Git and CI/CD](docs/git-and-cicd.md)** — GitHub/GitLab/Bitbucket/Gitea/Forgejo, private repositories, webhooks, previews, releases, and manifest approval.
 - **[API and CLI](docs/api-and-cli.md)** — tokens, CLI usage, CI examples, error handling, and compatibility guidance.
-- **[API reference](docs/api-reference.md)** — endpoint inventory grouped by authentication and feature area.
+- **[API reference](docs/api-reference.md)** — endpoint inventory and `/api/v1` OpenAPI contract.
 - **[Operations and security](docs/operations-and-security.md)** — environment values, backups/restore, monitoring, Cloudflare, Certbot, OIDC, recovery, and trust boundaries.
 - **[Cloudflare Tunnels](docs/cloudflare-tunnels.md)** — per-site connector setup, public-hostname routing, Docker origin targets, connector states, and troubleshooting.
 - **[Configuration reference](docs/configuration-reference.md)** — `.env` options and external executable/network requirements.
@@ -258,7 +258,9 @@ The main navigation includes:
 
 ## API and CLI
 
-The JSON API currently lives under `/api`. Automation should use a scoped bearer token created under **Security → API Tokens**.
+The versioned JSON API lives under `/api/v1`. Existing `/api` routes remain
+compatibility aliases. Automation should use a scoped bearer token created
+under **Security → API Tokens**; see [API compatibility](docs/api-compatibility.md).
 
 Common endpoints include:
 

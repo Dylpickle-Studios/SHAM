@@ -10,7 +10,10 @@ The JSON API lives under:
 /api
 ```
 
-There is not yet a `/api/v1` namespace. Pin SHAM versions for critical automation and test upgrades before production rollout.
+Use `/api/v1` for new automation. Existing `/api` routes remain compatibility
+aliases for the current major release line. The machine-readable contract is
+[OpenAPI 3.1](openapi.json), and the compatibility policy is documented in
+[API compatibility](api-compatibility.md).
 
 ## Authentication
 

@@ -10,17 +10,32 @@ const { ShamHarness, ROOT, run, waitFor } = require('./harness');
 
 const enabled = process.env.SHAM_RUN_INTEGRATION === '1';
 
-async function legacyCheckout() {
+async function supportedReleaseCheckout() {
   const checkout = await fs.mkdtemp(path.join(os.tmpdir(), 'sham-upgrade-baseline-'));
   const archive = path.join(checkout, 'baseline.tar');
-  const ref = (await run('git', ['rev-parse', 'HEAD^'], { cwd: ROOT })).stdout.trim();
+  const requested = String(process.env.SHAM_UPGRADE_FROM || '').trim();
+  const tags = (await run('git', ['tag', '--merged', 'HEAD', '--sort=-v:refname'], { cwd: ROOT })).stdout
+    .split(/\r?\n/)
+    .map((tag) => tag.trim())
+    .filter((tag) => /^v?\d+\.\d+\.\d+$/.test(tag));
+  const tag = requested || tags[0];
+  if (!tag) {
+    await fs.rm(checkout, { recursive: true, force: true });
+    return null;
+  }
+  try { await run('git', ['rev-parse', '--verify', `${tag}^{commit}`], { cwd: ROOT }); }
+  catch (error) {
+    await fs.rm(checkout, { recursive: true, force: true });
+    throw new Error(`SHAM_UPGRADE_FROM=${tag} is not an available stable release tag. Fetch tags or set SHAM_UPGRADE_FROM to a supported tag.`);
+  }
+  const ref = (await run('git', ['rev-parse', `${tag}^{commit}`], { cwd: ROOT })).stdout.trim();
   await run('git', ['archive', '--format=tar', '-o', archive, ref], { cwd: ROOT });
   await run('tar', ['-xf', archive, '-C', checkout]);
   await fs.rm(archive, { force: true });
-  // The historical application is installed from its own source tree while
-  // sharing the already locked dependency set; no current source is imported.
-  await fs.symlink(path.join(ROOT, 'node_modules'), path.join(checkout, 'node_modules'), 'dir');
-  return { checkout, ref };
+  // Install the release's own locked dependency graph. Sharing current
+  // node_modules can hide a genuine upgrade compatibility problem.
+  await run('npm', ['ci', '--no-fund', '--no-audit'], { cwd: checkout, env: { ...process.env, npm_config_update_notifier: 'false' } });
+  return { checkout, ref, tag };
 }
 
 function sqliteQuickCheck(dataDir) {
@@ -37,8 +52,13 @@ async function verifyArchive(dataDir, filename) {
   return JSON.parse(result.stdout);
 }
 
-test('upgrade from the pre-runtime-agent baseline preserves releases, secrets, and running traffic', { skip: !enabled }, async () => {
-  const legacy = await legacyCheckout();
+test('upgrade from the last supported stable release preserves releases, secrets, and running traffic', { skip: !enabled, timeout: 180_000 }, async (t) => {
+  const legacy = await supportedReleaseCheckout();
+  if (!legacy) {
+    if (process.env.SHAM_REQUIRE_UPGRADE_BASELINE === '1') throw new Error('No supported stable release tag is available. CI must fetch tags or set SHAM_UPGRADE_FROM.');
+    t.skip('No supported stable release tag is present in this checkout; set SHAM_UPGRADE_FROM to run the release-upgrade drill.');
+    return;
+  }
   const sham = new ShamHarness({ appRoot: legacy.checkout });
   try {
     await sham.start();

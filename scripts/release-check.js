@@ -35,6 +35,7 @@ if (exists('package-lock.json')) {
 
 requireCondition(new RegExp(`Current release: ${escapedVersion}`).test(read('README.md')), `README must identify release ${pkg.version}.`);
 requireCondition(new RegExp(`## \\[${escapedVersion}\\] — \\d{4}-\\d{2}-\\d{2}`).test(read('CHANGELOG.md')), `CHANGELOG must contain a dated ${pkg.version} release entry.`);
+requireCondition(JSON.parse(read('docs/openapi.json')).info?.version === pkg.version, 'OpenAPI info.version must match package.json.');
 requireCondition(/^ARG VERSION=dev$/m.test(read('Dockerfile')), 'Dockerfile must use the non-release VERSION=dev fallback; release builds inject package.json version.');
 requireCondition(/VERSION: \$\{SHAM_VERSION:-dev\}/.test(read('docker-compose.yml')), 'docker-compose.yml must not duplicate the current release version.');
 requireCondition(/VERSION: \$\{SHAM_VERSION:-dev\}/.test(read('docker-compose.isolation.yml')), 'Docker isolation overlay must not duplicate the current release version.');

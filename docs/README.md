@@ -20,7 +20,8 @@ This manual documents the current SHAM feature set. The root [README](../README.
 ### Automate or integrate SHAM
 
 - [API and CLI](api-and-cli.md) — token authentication, scopes, CLI commands, CI examples, errors, timeouts, and compatibility policy.
-- [API reference](api-reference.md) — endpoint inventory grouped by public, authenticated, administrator, site, operations, security, and plugin APIs.
+- [API reference](api-reference.md) — endpoint inventory and the versioned `/api/v1` contract.
+- [API compatibility](api-compatibility.md) — `/api/v1` compatibility and legacy-alias policy.
 - [Configuration reference](configuration-reference.md) — `.env` variables, optional executables, Docker networks, persistent paths, and production configuration notes.
 - [Integration and browser testing](integration-testing.md) — isolated deployment lifecycle, Docker Compose, and Chromium CI suites.
 
@@ -60,7 +61,8 @@ Press **Ctrl/Cmd+K** in the dashboard to search documentation categories, settin
 
 ## API versioning
 
-The HTTP API currently uses `/api` rather than a versioned `/api/v1` namespace. For critical automation, pin SHAM versions and rely on the endpoints explicitly documented in [API and CLI](api-and-cli.md) and [API reference](api-reference.md).
+Use `/api/v1` for new automation. Existing `/api` routes remain compatibility
+aliases; the exact stability policy is in [API compatibility](api-compatibility.md).
 
 ## Security language used in these docs
 

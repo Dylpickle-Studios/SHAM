@@ -2,7 +2,10 @@
 
 This is an endpoint inventory for the current SHAM release. It complements [API and CLI](api-and-cli.md), which focuses on automation patterns and stable CLI-oriented use.
 
-The API currently uses `/api` rather than a versioned `/api/v1` namespace. Pin SHAM versions for important automation.
+Use the versioned `/api/v1` namespace for new automation. The listed `/api`
+paths remain compatibility aliases. The machine-readable contract is
+[OpenAPI 3.1](openapi.json); see [API compatibility](api-compatibility.md) for
+the support and deprecation policy.
 
 ## Authentication legend
 

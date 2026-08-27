@@ -142,6 +142,31 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: false, limit: '2mb' }));
 
+// Version 1 is a compatibility-preserving alias of the established /api
+// surface. Keep the original URLs for existing scripts, but normalize v1
+// errors to the documented structured shape without changing legacy bodies.
+function apiV1Compatibility(req, res, next) {
+  if (!req.url.startsWith('/api/v1/') && req.url !== '/api/v1') return next();
+  const suffix = req.url.slice('/api/v1'.length) || '/';
+  req.url = `/api${suffix}`;
+  res.setHeader('API-Version', '1');
+  const json = res.json.bind(res);
+  res.json = (body) => {
+    if (!body || typeof body !== 'object' || typeof body.error !== 'string') return json(body);
+    const status = res.statusCode;
+    const code = status === 401 ? 'UNAUTHENTICATED'
+      : status === 403 ? 'FORBIDDEN'
+        : status === 404 ? 'NOT_FOUND'
+          : status === 409 ? 'CONFLICT'
+            : status === 413 ? 'PAYLOAD_TOO_LARGE'
+              : status === 429 ? 'RATE_LIMITED'
+                : 'INVALID_REQUEST';
+    return json({ ...body, error: { code, message: body.error } });
+  };
+  return next();
+}
+app.use(apiV1Compatibility);
+
 const authLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 30 });
 const stepUpLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 20 });
 const webhookLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 120 });
