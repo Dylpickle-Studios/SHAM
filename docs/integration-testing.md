@@ -34,13 +34,17 @@ service plus an internal-only dependency, proxy routing, reconciliation, site
 cleanup, and rejection of prohibited host-level Compose features.
 
 The same serial suite also runs two recovery drills. The upgrade drill archives
-the supported `v1.0.0` public stable baseline (or an explicit
+the `v1.1.1` public stable predecessor (or an explicit
 `SHAM_UPGRADE_FROM=<tag>`), installs that release's own locked dependencies,
 starts it with isolated data, deploys a Git application and secret, then starts
 current SHAM against that same data.
 It verifies database startup/migrations, Runtime Agent token creation, running
 traffic, encrypted environment data, release history, and rollback. CI fetches
-the full tag history and requires a stable baseline. The restore drill
+the full tag history and requires a stable baseline. The tagged `v1.1.1`
+source has a known bad `src/sites/core.js` relative import, so the disposable
+checkout receives a narrowly asserted module-resolution shim before startup;
+its application logic, database schema, persisted data, and migration paths
+remain the tagged release's own. The restore drill
 creates a local archive through the authenticated API, validates it with the
 production archive verifier, deletes the site, stages the authenticated
 restore, restarts SHAM, checks SQLite, release files, secret decryption,
