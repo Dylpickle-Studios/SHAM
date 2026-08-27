@@ -4,7 +4,7 @@ services:
     build:
       context: .
       args:
-        VERSION: 1.1.1
+        VERSION: ${SHAM_VERSION:-dev}
     container_name: sham
     restart: unless-stopped
     environment:

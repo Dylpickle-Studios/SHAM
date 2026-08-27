@@ -2,29 +2,20 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const { root, source: read } = require('./source-tree');
 
 test('public release metadata is coherent with package version', () => {
   const pkg = JSON.parse(read('package.json'));
   const lock = JSON.parse(read('package-lock.json'));
-  const escapedVersion = pkg.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
   assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
   assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].version, pkg.version);
   assert.equal(pkg.license, 'AGPL-3.0-or-later');
   assert.equal(pkg.private, true);
-  assert.match(read('README.md'), new RegExp(`Current release: ${escapedVersion}`));
-  assert.match(read('CHANGELOG.md'), new RegExp(`## \\[${escapedVersion}\\] — \\d{4}-\\d{2}-\\d{2}`));
-  assert.match(read('Dockerfile'), new RegExp(`^ARG VERSION=${escapedVersion}$`, 'm'));
-  assert.match(read('docker-compose.yml'), new RegExp(`VERSION: ${escapedVersion}`));
-  assert.match(read('.github/workflows/ci.yml'), new RegExp(`VERSION=${escapedVersion}`));
-  assert.match(read('RELEASING.md'), new RegExp(`ghcr\\.io/<owner>/<repository>:${escapedVersion}`));
-  assert.match(read('docs/README.md'), new RegExp(`current SHAM ${escapedVersion} feature set`));
-  assert.match(read('docs/api-reference.md'), new RegExp(`SHAM ${escapedVersion}`));
-  assert.doesNotMatch(read('README.md'), /3\.1\.1|3\.1\.0/);
-  assert.doesNotMatch(read('public/index.html'), /3\.1\.1|3\.1\.0/);
+  const check = spawnSync(process.execPath, ['scripts/release-check.js'], { cwd: root, encoding: 'utf8' });
+  assert.equal(check.status, 0, `${check.stdout}${check.stderr}`);
 });
 
 test('GitHub CI and GHCR release workflows enforce validation and narrow permissions', () => {

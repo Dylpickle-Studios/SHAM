@@ -31,7 +31,7 @@ services:
     build:
       context: .
       args:
-        VERSION: 1.1.1
+        VERSION: ${SHAM_VERSION:-dev}
     container_name: sham-runtime-agent
     restart: unless-stopped
     command: ["node", "runtime-agent/index.js"]

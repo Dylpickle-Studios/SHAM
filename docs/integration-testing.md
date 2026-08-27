@@ -33,6 +33,17 @@ and SHAM process restart reconciliation. The Compose fixture verifies a web
 service plus an internal-only dependency, proxy routing, reconciliation, site
 cleanup, and rejection of prohibited host-level Compose features.
 
+The same serial suite also runs two recovery drills. The upgrade drill archives
+the preceding pre-Runtime-Agent source revision, starts it with isolated data,
+deploys a Git application and secret, then starts current SHAM against that
+same data. It verifies database startup/migrations, Runtime Agent token
+creation, running traffic, encrypted environment data, release history, and
+rollback. CI fetches the parent revision for this purpose. The restore drill
+creates a local archive through the authenticated API, validates it with the
+production archive verifier, deletes the site, stages the authenticated
+restore, restarts SHAM, checks SQLite, release files, secret decryption,
+traffic, and rollback.
+
 Compose validation is performed against Docker's normalized Compose
 configuration before `compose up`. Privileged services, namespace overrides,
 added capabilities, host bind mounts, Docker socket mounts, host devices, and
@@ -53,11 +64,12 @@ npm run test:e2e
 ```
 
 They capture screenshots, traces, and video on failure. Browser binaries are
-not committed; GitHub Actions installs Chromium in its browser job. The suite
-currently covers first-run administrator setup and an authenticated dashboard
-view of a real deployed site. It does not yet navigate the site-specific Logs
-panel; use API setup for deployment prerequisites when the browser behavior
-itself is not under test.
+not committed; GitHub Actions installs Chromium in its browser job. The serial
+suite covers the unauthenticated access gate, first-run setup, invalid login,
+session refresh, Git-backed Node deployment, workspace logs, stop/start/restart,
+version switching, rollback, and a failed candidate preserving the active
+release. It uses the UI for the behavior under test and the harness only for
+the local fixture repository, edge assertion, and fixture revision changes.
 
 ## CI layout
 

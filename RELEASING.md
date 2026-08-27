@@ -39,7 +39,7 @@ Images are published as:
 
 ```text
 ghcr.io/<owner>/<repository>:edge          # main branch
-ghcr.io/<owner>/<repository>:1.1.1         # v1.1.1 tag
+ghcr.io/<owner>/<repository>:<version>     # v<version> tag
 ghcr.io/<owner>/<repository>:1.1
 ghcr.io/<owner>/<repository>:1
 ghcr.io/<owner>/<repository>:latest
@@ -52,7 +52,7 @@ After the first publish, open the package under your GitHub profile or organizat
 Pull and run the image:
 
 ```bash
-docker pull ghcr.io/<owner>/<repository>:1.1.1
+docker pull ghcr.io/<owner>/<repository>:<version>
 
 docker run -d \
   --name sham \
@@ -62,34 +62,34 @@ docker run -d \
   -p 443:443 \
   -p 4100-4199:4100-4199 \
   -v "$PWD/sham-data:/data" \
-  ghcr.io/<owner>/<repository>:1.1.1
+  ghcr.io/<owner>/<repository>:<version>
 ```
 
 Or use the supplied Compose file:
 
 ```bash
-SHAM_IMAGE=ghcr.io/<owner>/<repository>:1.1.1 docker compose pull
-SHAM_IMAGE=ghcr.io/<owner>/<repository>:1.1.1 docker compose up -d
+SHAM_IMAGE=ghcr.io/<owner>/<repository>:<version> docker compose pull
+SHAM_IMAGE=ghcr.io/<owner>/<repository>:<version> docker compose up -d
 ```
 
-## 4. Create version 1.1.1
+## 4. Create a release
 
-Confirm `package.json` contains `"version": "1.1.1"`, the lockfile is committed, and CI is green. Then create and push the tag:
+Confirm `package.json` contains the release version, the lockfile is committed, and CI is green. Then create and push the matching tag:
 
 ```bash
 git switch main
 git pull --ff-only
 npm run release:check
 npm audit --omit=dev --audit-level=high
-git tag -s v1.1.1 -m "SHAM 1.1.1"
-git push origin v1.1.1
+git tag -s v<version> -m "SHAM <version>"
+git push origin v<version>
 ```
 
 Use an unsigned annotated tag when GPG signing is not configured:
 
 ```bash
-git tag -a v1.1.1 -m "SHAM 1.1.1"
-git push origin v1.1.1
+git tag -a v<version> -m "SHAM <version>"
+git push origin v<version>
 ```
 
 The tag triggers both container publishing and GitHub Release creation. The release contains `.zip` and `.tar.gz` source archives plus SHA-256 checksum files. GitHub also provides its automatically generated source archives.
@@ -98,7 +98,7 @@ The tag triggers both container publishing and GitHub Release creation. The rele
 
 - Confirm the GitHub Release is published and its version matches `package.json`.
 - Download the release archive and verify its checksum.
-- Pull `ghcr.io/<owner>/<repository>:1.1.1` on a clean host.
+- Pull `ghcr.io/<owner>/<repository>:<version>` on a clean host.
 - Confirm `/api/health` responds and complete first-admin setup.
 - Verify the image package is public when public distribution is intended.
 - Perform a backup and restore drill before describing a deployment as production-ready.

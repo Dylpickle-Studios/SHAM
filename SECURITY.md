@@ -4,8 +4,12 @@
 
 | Version | Supported |
 | --- | --- |
-| 1.0.x | Yes |
+| 1.1.x (current release line) | Yes |
 | Older internal builds | No |
+
+SHAM supports the current release line. Security fixes are made on the latest
+release in that line; users of older releases should upgrade before reporting
+or relying on a fix.
 
 ## Reporting a vulnerability
 
@@ -22,4 +26,12 @@ Please avoid accessing data that is not yours, disrupting running systems, or pu
 
 ## Security expectations for deployments
 
-SHAM executes administrator-supplied Node.js applications and enabled JavaScript plugins as trusted code. Use a dedicated host or VM, run SHAM unprivileged, restrict mounted data and network access, protect the dashboard, and prefer Docker isolation for code that is not fully trusted. See the README's trust-boundary and security sections.
+SHAM executes administrator-supplied Node.js applications and enabled JavaScript plugins as trusted code. Use a dedicated host or VM, run SHAM unprivileged, restrict mounted data and network access, protect the dashboard, and prefer Docker isolation for code that is not fully trusted.
+
+In the recommended Docker-isolation deployment, the internet-facing SHAM
+control-plane container does **not** mount `/var/run/docker.sock`. A separate
+Runtime Agent holds that mount and accepts authenticated, allowlisted RPC over
+a local Unix socket. This reduces the control plane's blast radius; it does not
+make Docker socket access safe. Treat the Runtime Agent and its host as
+substantially privileged infrastructure. See the README's trust-boundary and
+security sections.

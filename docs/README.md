@@ -1,6 +1,6 @@
 # SHAM documentation
 
-This manual documents the current SHAM 1.1.1 feature set. The root [README](../README.md) is an overview; use these guides for operating and automating the application.
+This manual documents the current SHAM feature set. The root [README](../README.md) identifies the current release; use these guides for operating and automating the application.
 
 ## Choose a guide by task
 

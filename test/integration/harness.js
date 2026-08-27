@@ -57,7 +57,9 @@ function staticFileServer(root) {
 }
 
 class ShamHarness {
-  constructor() {
+  constructor({ appRoot = ROOT, dataDir = '' } = {}) {
+    this.appRoot = appRoot;
+    this.suppliedDataDir = dataDir;
     this.dataDir = '';
     this.port = 0;
     this.edgePort = 0;
@@ -74,7 +76,8 @@ class ShamHarness {
   }
 
   async start({ docker = false, register = true } = {}) {
-    this.dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sham-integration-'));
+    this.dataDir = this.suppliedDataDir || await fs.mkdtemp(path.join(os.tmpdir(), 'sham-integration-'));
+    if (this.suppliedDataDir) await fs.mkdir(this.dataDir, { recursive: true, mode: 0o700 });
     this.port = await freePort();
     this.edgePort = await freePort();
     this.baseUrl = `http://127.0.0.1:${this.port}`;
@@ -88,7 +91,7 @@ class ShamHarness {
   async startSham() {
     const { spawn } = require('node:child_process');
     this.process = spawn(process.execPath, ['src/bootstrap.js'], {
-      cwd: ROOT,
+      cwd: this.appRoot,
       env: {
         ...process.env,
         NODE_ENV: 'test',
@@ -115,7 +118,7 @@ class ShamHarness {
   async startRuntimeAgent() {
     const { spawn } = require('node:child_process');
     this.runtimeAgent = spawn(process.execPath, ['runtime-agent/index.js'], {
-      cwd: ROOT,
+      cwd: this.appRoot,
       env: {
         ...process.env,
         NODE_ENV: 'test', SHAM_TEST_MODE: '1', SHAM_DATA_PATH: this.dataDir,
@@ -197,6 +200,50 @@ class ShamHarness {
     await run('git', ['commit', '-m', message], { cwd: this.gitWorktree });
     await run('git', ['push', 'origin', 'main'], { cwd: this.gitWorktree });
     await run('git', ['update-server-info'], { cwd: this.gitBare });
+  }
+
+  async useSmartGitHttp() {
+    const { spawn } = require('node:child_process');
+    this.gitServer.closeIdleConnections?.();
+    this.gitServer.closeAllConnections?.();
+    await new Promise((resolve) => this.gitServer.close(resolve));
+    this.gitServer = http.createServer((request, response) => {
+      const url = new URL(request.url, 'http://localhost');
+      const child = spawn('git', ['http-backend'], {
+        env: {
+          ...process.env,
+          GIT_PROJECT_ROOT: this.gitRoot,
+          GIT_HTTP_EXPORT_ALL: '1',
+          PATH_INFO: url.pathname,
+          QUERY_STRING: url.search.slice(1),
+          REQUEST_METHOD: request.method,
+          CONTENT_TYPE: request.headers['content-type'] || '',
+          CONTENT_LENGTH: request.headers['content-length'] || '',
+          REMOTE_ADDR: '127.0.0.1'
+        }, stdio: ['pipe', 'pipe', 'pipe']
+      });
+      const chunks = [];
+      child.stdout.on('data', (chunk) => chunks.push(chunk));
+      child.once('error', () => response.writeHead(500).end());
+      child.once('exit', (code) => {
+        if (response.writableEnded) return;
+        if (code !== 0) return response.writeHead(500).end();
+        const output = Buffer.concat(chunks);
+        const separator = output.indexOf('\r\n\r\n');
+        if (separator < 0) return response.writeHead(500).end();
+        const headers = output.subarray(0, separator).toString('utf8').split('\r\n');
+        let status = 200;
+        for (const header of headers) {
+          const [name, ...values] = header.split(':');
+          if (name.toLowerCase() === 'status') status = Number(values.join(':').trim().split(/\s+/, 1)[0]) || 500;
+          else if (name && values.length) response.setHeader(name, values.join(':').trim());
+        }
+        response.writeHead(status).end(output.subarray(separator + 4));
+      });
+      request.pipe(child.stdin);
+    });
+    await new Promise((resolve) => this.gitServer.listen(0, '127.0.0.1', resolve));
+    this.gitUrl = `http://127.0.0.1:${this.gitServer.address().port}/fixture.git`;
   }
 
   async createNodeSite({ name = 'integration-node', domain = 'node.integration.test' } = {}) {

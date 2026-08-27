@@ -1,6 +1,6 @@
 # API reference
 
-This is an endpoint inventory for SHAM 1.1.1. It complements [API and CLI](api-and-cli.md), which focuses on automation patterns and stable CLI-oriented use.
+This is an endpoint inventory for the current SHAM release. It complements [API and CLI](api-and-cli.md), which focuses on automation patterns and stable CLI-oriented use.
 
 The API currently uses `/api` rather than a versioned `/api/v1` namespace. Pin SHAM versions for important automation.
 

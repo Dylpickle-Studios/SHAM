@@ -4,13 +4,19 @@ Thank you for helping improve SHAM.
 
 ## Development setup
 
-Requirements: Node.js 20 or newer, npm, and a compiler toolchain when `better-sqlite3` has no matching prebuilt binary.
+Requirements: Node.js 22 or newer (the `package.json` engine requirement is
+authoritative), npm, and a compiler toolchain when `better-sqlite3` has no
+matching prebuilt binary. Docker is required for `npm run test:integration`
+and Docker-managed runtime tests; Playwright's Chromium install is required
+for `npm run test:e2e`.
 
 ```bash
 cp .env.example .env
 npm install
 npm run check
 npm test
+npm run test:integration
+npm run test:e2e
 npm start
 ```
 
