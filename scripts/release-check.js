@@ -38,7 +38,10 @@ requireCondition(new RegExp(`## \\[${escapedVersion}\\] — \\d{4}-\\d{2}-\\d{2}
 requireCondition(/^ARG VERSION=dev$/m.test(read('Dockerfile')), 'Dockerfile must use the non-release VERSION=dev fallback; release builds inject package.json version.');
 requireCondition(/VERSION: \$\{SHAM_VERSION:-dev\}/.test(read('docker-compose.yml')), 'docker-compose.yml must not duplicate the current release version.');
 requireCondition(/VERSION: \$\{SHAM_VERSION:-dev\}/.test(read('docker-compose.isolation.yml')), 'Docker isolation overlay must not duplicate the current release version.');
-requireCondition(/node -p \\"require\('\.\/package\.json'\)\.version\\"/.test(read('.github/workflows/ci.yml')), 'CI Docker smoke build must read its version from package.json.');
+const ciWorkflow = read('.github/workflows/ci.yml');
+const ciReadsPackageVersion = /node -p ['"]require\(["']\.\/package\.json["']\)\.version['"]/.test(ciWorkflow);
+const ciUsesPackageVersion = /VERSION=\$\{\{ steps\.package\.outputs\.version \}\}/.test(ciWorkflow);
+requireCondition(ciReadsPackageVersion && ciUsesPackageVersion, 'CI Docker smoke build must read its version from package.json.');
 requireCondition(/ghcr\.io\/<owner>\/<repository>/.test(read('RELEASING.md')), 'RELEASING.md must explain GHCR image names.');
 requireCondition(/<version>/.test(read('RELEASING.md')), 'RELEASING.md must use the <version> placeholder instead of duplicating the current release number.');
 requireCondition(/packages:\s*write/.test(read('.github/workflows/docker-publish.yml')), 'Docker workflow must request package write permission.');
