@@ -170,6 +170,20 @@ class ShamHarness {
     await this.request('/api/auth/register', { method: 'POST', body: { username: 'integration-admin', password: 'integration-password-123!' } });
   }
 
+  async loginAdmin() {
+    // Authentication/session formats can change across an upgrade. Exercise
+    // the supported login flow instead of carrying a legacy cookie into the
+    // upgraded process.
+    this.cookie = '';
+    const result = await this.request('/api/auth/login', {
+      method: 'POST',
+      body: { username: 'integration-admin', password: 'integration-password-123!' }
+    });
+    assert.equal(result.mfaRequired, undefined, 'integration administrator unexpectedly requires MFA');
+    assert.ok(this.cookie, 'administrator login did not issue a session cookie');
+    return result.user;
+  }
+
   async startGitRepository() {
     this.gitRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'sham-git-fixture-'));
     this.gitWorktree = path.join(this.gitRoot, 'work');

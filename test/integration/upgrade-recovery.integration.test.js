@@ -106,6 +106,7 @@ test('upgrade from the last supported stable release preserves releases, secrets
     await sham.startRuntimeAgent();
     await fs.access(path.join(sham.dataDir, 'runtime-agent', 'agent.token'));
     await sham.waitForEdge(site.domain, 'SHAM_TEST_VERSION_2');
+    await sham.loginAdmin();
     const revealed = await sham.request(`/api/sites/${site.id}/environment/RECOVERY_SECRET/reveal`, {
       method: 'POST', body: { password: 'integration-password-123!' }
     });
