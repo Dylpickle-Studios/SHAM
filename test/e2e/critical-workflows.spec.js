@@ -121,7 +121,10 @@ test('a workspace deployment switches traffic to version 2 and rollback restores
   await page.getByRole('button', { name: 'Deploy Git' }).click();
   await sham.waitForEdge(siteDomain, 'SHAM_TEST_VERSION_2');
   await expect(page.locator('#workspace-deployment-list')).toContainText(/Active|browser version 2/i);
-  await page.getByRole('button', { name: 'Roll back' }).last().click();
+  await page.locator('#workspace-deployment-list [data-deployment-rollback]').click();
+  await expect(page.locator('#action-dialog')).toBeVisible();
+  await page.locator('#action-confirm').click();
+  await expect(page.locator('#action-dialog')).toBeHidden();
   await sham.waitForEdge(siteDomain, 'SHAM_TEST_VERSION_1');
 });
 
