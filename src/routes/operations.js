@@ -23,6 +23,15 @@ function registerOperationsRoutes(ctx) {
     const cloudflareTunnel = cloudflareTunnels.status(site.id);
     return { ...cloudflareTunnel, exposureWarning: tunnelExposureWarning(site, cloudflareTunnel) };
   };
+  const assertTunnelDoesNotExposePrivateListener = (site, originService) => {
+    if (!originService || !Array.isArray(site.additional_listeners)) return;
+    let origin;
+    try { origin = new URL(originService); } catch { return; }
+    const port = Number(origin.port || (origin.protocol === 'https:' ? 443 : 80));
+    if (site.additional_listeners.some((listener) => Number(listener.port) === port)) {
+      throw new Error('A private process listener cannot be used as a Cloudflare Tunnel origin. Route the site through its primary listener or the shared edge instead.');
+    }
+  };
 
 function authenticateDeployWebhook(req, res, next) {
     const site = manager.getSite(Number(req.params.id));
@@ -379,6 +388,7 @@ function authenticateDeployWebhook(req, res, next) {
       if (has('managedRoute')) configuration.managedRoute = bool(body.managedRoute, false);
       if (has('tunnelOnly')) configuration.tunnelOnly = bool(body.tunnelOnly, false);
       if (has('connectorMode')) configuration.connectorMode = String(body.connectorMode || '');
+      assertTunnelDoesNotExposePrivateListener(site, configuration.originService);
       if (configuration.tunnelOnly && ['0.0.0.0', '::'].includes(String(site.bind_host || ''))) throw new Error('Tunnel-only mode requires this site to bind to localhost or a loopback address.');
       const result = await cloudflareTunnels.configure(site.id, configuration);
       recordAudit(req.user.id, 'site.cloudflare-tunnel.configure', {
@@ -418,6 +428,7 @@ function authenticateDeployWebhook(req, res, next) {
       if (!site.domain || !site.edge_enabled) throw new Error('Provisioning a managed tunnel route requires a site domain and the shared edge proxy.');
       if (['0.0.0.0', '::'].includes(String(site.bind_host || '')) && bool(req.body?.tunnelOnly, true)) throw new Error('Tunnel-only mode requires this site to bind to localhost or a loopback address.');
       const originService = String(req.body?.originService || '').trim();
+      assertTunnelDoesNotExposePrivateListener(site, originService);
       const controlPlane = cloudflareTunnelControlPlane();
       const provisioned = await controlPlane.createAndConfigure({ name: `sham-${site.slug}-${site.id}`, publicHostname: site.domain, originService });
       const result = await cloudflareTunnels.configure(site.id, {

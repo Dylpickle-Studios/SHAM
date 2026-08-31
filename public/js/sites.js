@@ -208,6 +208,10 @@ function updateRuntimeFields() {
   $('#site-compose-file').required = compose;
   $('#site-compose-service').required = compose;
   $('#site-container-runtime-note').hidden = !(container || compose);
+  // Keep this visible for Node/process Docker isolation as well: an existing
+  // private-listener configuration must remain editable/clearable before the
+  // operator changes isolation. The server enforces process isolation.
+  $('#site-private-listener-options').hidden = !(node || processRuntime);
   $('#site-install-command').closest('label').hidden = sourceManagedBuild;
   $('#site-build-command').closest('label').hidden = sourceManagedBuild;
   $('#site-build-output').closest('label').hidden = runtime !== 'static';
@@ -523,6 +527,7 @@ function openNewSite() {
   $('#site-runtime-preset').value = 'custom';
   $('#site-start-command').value = '';
   $('#site-runtime-port-env').value = 'PORT';
+  $('#site-private-listeners').value = '[]';
   $('#site-working-directory').value = '.';
   $('#site-container-mode').value = 'image';
   $('#site-runtime-container-image').value = 'nginx:alpine';
@@ -674,6 +679,8 @@ function openEditSite(site) {
   $('#site-runtime-preset').value = site.runtime_preset || (site.runtime_type === 'process' ? 'custom' : site.runtime_type === 'container' ? 'image' : site.runtime_type === 'compose' ? 'compose' : site.runtime_type === 'static' ? 'static' : 'node');
   $('#site-start-command').value = site.start_command || '';
   $('#site-runtime-port-env').value = site.runtime_port_env || 'PORT';
+  $('#site-private-listeners').value = JSON.stringify(site.additional_listeners || [], null, 2);
+  $('#site-private-listener-options').open = Boolean((site.additional_listeners || []).length);
   $('#site-working-directory').value = site.working_directory || '.';
   $('#site-container-mode').value = site.container_mode || 'image';
   $('#site-container-port').value = site.container_port || 3000;
@@ -778,6 +785,7 @@ function appendConfiguration(formData) {
   formData.append('runtimePreset', selectedRuntimePreset());
   formData.append('startCommand', selectedStartCommand());
   formData.append('runtimePortEnv', $('#site-runtime-port-env').value || 'PORT');
+  formData.append('additionalListeners', $('#site-private-listeners').value || '[]');
   formData.append('workingDirectory', $('#site-working-directory').value || '.');
   formData.append('containerMode', $('#site-container-mode').value);
   formData.append('containerPort', $('#site-container-port').value || '3000');
@@ -887,6 +895,7 @@ $('#site-form').addEventListener('submit', async (event) => {
           runtimePreset: selectedRuntimePreset(),
           startCommand: selectedStartCommand(),
           runtimePortEnv: $('#site-runtime-port-env').value || 'PORT',
+          additionalListeners: $('#site-private-listeners').value || '[]',
           workingDirectory: $('#site-working-directory').value || '.',
           containerMode: $('#site-container-mode').value,
           containerPort: $('#site-container-port').value || '3000',

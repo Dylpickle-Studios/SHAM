@@ -72,6 +72,20 @@ Available API-token scopes in this release are `read`, `logs:read`, `deploy`, `s
 | GET | `/api/statistics` | Auth | Dashboard traffic/visitor/attention summaries. |
 | GET | `/api/runtime-events` | Auth | Runtime event stream/history used by Observability. |
 
+### Private process listeners
+
+`POST /api/sites` and `PUT /api/sites/:id` accept `additionalListeners` for `node` or `process` sites using process isolation. It may be either a JSON array in multipart form data or an array in a JSON request:
+
+```json
+{
+  "additionalListeners": [
+    { "name": "admin", "port": 4101, "bindHost": "10.8.0.1", "portEnv": "ADMIN_PORT" }
+  ]
+}
+```
+
+Each entry has a unique `name`, external private `port`, private `bindHost`, and unique environment-variable `portEnv`. At most four entries are allowed. `bindHost` must be loopback, RFC1918/CGNAT IPv4, or ULA IPv6; public addresses, port collisions, reserved environment names, and unsupported Docker/Compose runtimes are rejected with `400`. SHAM injects an internal app port in `portEnv`, verifies TCP readiness, and proxies the declared private listener to it. The primary site port remains the only shared-edge/Cloudflare-capable listener. The site response returns the normalized list as `additional_listeners`.
+
 ## Firewall
 
 | Method | Path | Access | Purpose |

@@ -217,7 +217,17 @@ class SiteManager extends DeliverySiteManager {
     let lastError;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const port = await ephemeralPort();
-      const env = this.runtimeEnvironment(site, spec, port, '127.0.0.1', options.preview ? { SHAM_PREVIEW: '1' } : {});
+      const privateListeners = await Promise.all((site.additional_listeners || []).map(async (listener) => ({
+        ...listener,
+        internalPort: await ephemeralPort(),
+        target: ''
+      })));
+      for (const listener of privateListeners) listener.target = `http://127.0.0.1:${listener.internalPort}`;
+      const listenerEnvironment = Object.fromEntries(privateListeners.map((listener) => [listener.portEnv, String(listener.internalPort)]));
+      const env = this.runtimeEnvironment(site, spec, port, '127.0.0.1', {
+        ...listenerEnvironment,
+        ...(options.preview ? { SHAM_PREVIEW: '1' } : {})
+      });
       if (site.memory_limit_mb > 0 && (site.runtime_type === 'node' || ['node', 'npm'].includes(spec.preset))) {
         env.NODE_OPTIONS = `${env.NODE_OPTIONS || ''} --max-old-space-size=${Number(site.memory_limit_mb)}`.trim();
       }
@@ -225,10 +235,16 @@ class SiteManager extends DeliverySiteManager {
       const prefix = `${options.preview ? 'preview' : spec.preset || 'process'}: `;
       lineLogger(child.stdout, (line) => this.log(site.id, 'info', `${prefix}${line}`));
       lineLogger(child.stderr, (line) => this.log(site.id, 'error', `${prefix}${line}`));
-      const backend = { driver: 'process', child, internalHost: '127.0.0.1', internalPort: port, target: `http://127.0.0.1:${port}`, cwd, env, spec, root, active: false, stopping: false, site };
+      const backend = { driver: 'process', child, internalHost: '127.0.0.1', internalPort: port, target: `http://127.0.0.1:${port}`, additionalListeners: privateListeners, cwd, env, spec, root, active: false, stopping: false, site };
       this.bindBackendExit(site, backend);
       try {
         await waitForReadiness({ ...spec, site, cwd, host: backend.internalHost, internalPort: port }, { child, cwd, env, host: backend.internalHost, port, log: (m) => this.log(site.id, 'error', m) });
+        for (const listener of privateListeners) {
+          await waitForReadiness({ ...spec, site, cwd, readiness: { type: 'tcp', timeoutMs: spec.readiness.timeoutMs }, host: '127.0.0.1', internalPort: listener.internalPort }, {
+            child, cwd, env, host: '127.0.0.1', port: listener.internalPort,
+            log: (m) => this.log(site.id, 'error', `Private listener ${listener.name}: ${m}`)
+          });
+        }
         return backend;
       } catch (error) {
         lastError = error;
@@ -411,6 +427,7 @@ class SiteManager extends DeliverySiteManager {
     runtime.stopping = true;
     runtime.proxy?.close();
     for (const socket of runtime.webSockets || []) socket.destroy();
+    const privateGatewaysClosed = this.closePrivateGateways(runtime);
     const gatewayClosed = closeServer(runtime.server).catch((error) => {
       this.log(site.id, 'error', `Could not close the exited runtime gateway: ${error.message}`);
     });
@@ -423,7 +440,7 @@ class SiteManager extends DeliverySiteManager {
     const backendCleaned = this.stopBackend(backend).catch((error) => {
       this.log(site.id, 'error', `Could not clean the exited ${backend.driver} runtime: ${error.message}`);
     });
-    const cleanup = Promise.all([gatewayClosed, backendCleaned]);
+    const cleanup = Promise.all([gatewayClosed, privateGatewaysClosed, backendCleaned]);
     if (site.restart_policy === 'always' || (site.restart_policy === 'on-failure' && code !== 0)) {
       cleanup.then(() => this.scheduleRestart(site, message))
         .catch((error) => this.log(site.id, 'error', `Automatic restart failed: ${error.message}`));
@@ -492,6 +509,48 @@ class SiteManager extends DeliverySiteManager {
     return runtime;
   }
 
+  createPrivateGateway(runtime, listener) {
+    const gateway = { listener, server: null, proxy: null, webSockets: new Set() };
+    const proxy = httpProxy.createProxyServer({ ws: true, xfwd: true, changeOrigin: false, timeout: HTTP_REQUEST_TIMEOUT_MS, proxyTimeout: HTTP_REQUEST_TIMEOUT_MS });
+    gateway.proxy = proxy;
+    proxy.on('proxyRes', (_proxyRes, proxyReq, res) => this.applyHeaders(runtime.site, res, proxyReq));
+    proxy.on('error', (error, _req, responseOrSocket) => {
+      this.log(runtime.site.id, 'error', `Private listener ${listener.name} proxy: ${error.message}`);
+      if (typeof responseOrSocket?.writeHead === 'function') {
+        if (responseOrSocket.headersSent) return responseOrSocket.destroy?.(error);
+        responseOrSocket.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+        responseOrSocket.end('Private upstream service is unavailable.');
+      } else responseOrSocket?.destroy?.();
+    });
+    const targetFor = () => runtime.backend?.additionalListeners?.find((item) => item.name === listener.name)?.target || '';
+    gateway.server = require('node:http').createServer((req, res) => {
+      const target = targetFor();
+      if (!target) return res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Private listener is not available.');
+      this.applyHeaders(runtime.site, res, req);
+      proxy.web(req, res, { target });
+    });
+    gateway.server.requestTimeout = HTTP_REQUEST_TIMEOUT_MS;
+    gateway.server.headersTimeout = Math.min(60_000, HTTP_REQUEST_TIMEOUT_MS);
+    gateway.server.keepAliveTimeout = 5000;
+    gateway.server.on('upgrade', (req, socket, head) => {
+      const target = targetFor();
+      if (!target) return socket.destroy();
+      gateway.webSockets.add(socket);
+      socket.once('close', () => gateway.webSockets.delete(socket));
+      proxy.ws(req, socket, head, { target });
+    });
+    return gateway;
+  }
+
+  async closePrivateGateways(runtime) {
+    for (const gateway of runtime?.privateListeners || []) {
+      for (const socket of gateway.webSockets || []) socket.destroy();
+      await closeServer(gateway.server).catch((error) => this.log(runtime.site?.id, 'error', `Could not close private listener ${gateway.listener?.name}: ${error.message}`));
+      gateway.proxy?.close();
+    }
+    if (runtime) runtime.privateListeners = [];
+  }
+
   persistRuntime(site, backend, state = 'running') {
     const externalId = backend.composeProject || backend.containerId || backend.child?.pid || '';
     this.db.prepare(`INSERT INTO runtime_instances (site_id, driver, external_id, internal_host, internal_port, root_path, observed_state, updated_at)
@@ -548,6 +607,12 @@ class SiteManager extends DeliverySiteManager {
       if (!runtime) {
         runtime = this.createGateway(site, backend);
         await listen(runtime.server, site.port, site.bind_host);
+        runtime.privateListeners = [];
+        for (const listener of backend.additionalListeners || []) {
+          const gateway = this.createPrivateGateway(runtime, listener);
+          await listen(gateway.server, listener.port, listener.bindHost);
+          runtime.privateListeners.push(gateway);
+        }
         this.running.set(site.id, runtime);
         try { await this.operations?.afterSiteStart(site, runtime); }
         catch (error) { throw new Error(`Site started but its protection layer failed: ${error.message}`); }
@@ -584,6 +649,7 @@ class SiteManager extends DeliverySiteManager {
       } else if (createdGateway && runtime) {
         await this.operations?.beforeSiteStop(site, runtime).catch((cleanupError) => this.log(site.id, 'error', `Protection rollback failed: ${cleanupError.message}`));
         this.running.delete(site.id);
+        await this.closePrivateGateways(runtime);
         await closeServer(runtime.server).catch(() => {});
         runtime.proxy?.close();
       }
@@ -623,6 +689,7 @@ class SiteManager extends DeliverySiteManager {
       await this.operations?.beforeSiteStop(site, runtime).catch((error) => this.log(site.id, 'error', `Protection rollback failed: ${error.message}`));
       for (const socket of runtime.webSockets || []) socket.destroy();
       this.running.delete(site.id);
+      await this.closePrivateGateways(runtime);
       await closeServer(runtime.server).catch((error) => this.log(site.id, 'error', `Gateway cleanup failed during rollback: ${error.message}`));
       runtime.proxy?.close();
       try { this.db.prepare('DELETE FROM runtime_instances WHERE site_id = ?').run(site.id); }
@@ -717,6 +784,7 @@ class SiteManager extends DeliverySiteManager {
       runtime.exited = Boolean(candidate.backend.exited || (candidate.backend.child && (candidate.backend.child.exitCode !== null || candidate.backend.child.signalCode !== null)));
       if (runtime.exited) {
         runtime.proxy?.close();
+        await this.closePrivateGateways(runtime);
         await closeServer(runtime.server);
         this.running.delete(site.id);
         await this.stopBackend(candidate.backend).catch(() => {});
@@ -741,6 +809,7 @@ class SiteManager extends DeliverySiteManager {
     runtime.stopping = true;
     await this.operations?.beforeSiteStop(this.getSite(numericId) || { id: numericId }, runtime).catch((error) => this.log(numericId, 'error', `Protection shutdown failed: ${error.message}`));
     for (const socket of runtime.webSockets || []) socket.destroy();
+    await this.closePrivateGateways(runtime);
     await closeServer(runtime.server);
     runtime.proxy?.close();
     await this.stopBackend(runtime.backend);

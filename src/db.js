@@ -156,6 +156,7 @@ ensureColumn('sites', 'build_output_dir', "TEXT NOT NULL DEFAULT ''");
 ensureColumn('sites', 'runtime_preset', "TEXT NOT NULL DEFAULT ''");
 ensureColumn('sites', 'start_command', "TEXT NOT NULL DEFAULT ''");
 ensureColumn('sites', 'runtime_port_env', "TEXT NOT NULL DEFAULT 'PORT'");
+ensureColumn('sites', 'additional_listeners_json', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('sites', 'working_directory', "TEXT NOT NULL DEFAULT ''");
 ensureColumn('sites', 'readiness_type', "TEXT NOT NULL DEFAULT 'tcp'");
 ensureColumn('sites', 'readiness_path', "TEXT NOT NULL DEFAULT '/'");

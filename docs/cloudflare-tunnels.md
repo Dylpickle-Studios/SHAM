@@ -75,6 +75,10 @@ Open **Settings → Instance → Cloudflare Tunnel connectors**. A healthy conne
 
 Then request the public hostname through Cloudflare and confirm that it reaches the intended SHAM site.
 
+### Public site listener only
+
+Cloudflare Tunnel routes may target only a site's primary public listener or the shared edge. If a Node/managed-process site has configured private listeners for a VPN-only administration service, SHAM rejects using any of those ports as a Tunnel origin. This prevents an otherwise private listener from being accidentally published. Keep the administration listener reachable through the VPN/host firewall instead; see [Runtimes and Docker](runtimes-and-docker.md#public-and-private-listeners-in-one-process).
+
 ## Connector states
 
 | State | Meaning |

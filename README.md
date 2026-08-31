@@ -27,7 +27,7 @@ It can serve static projects directly, supervise arbitrary server processes, run
 | **Container sources** | Existing image, Dockerfile, Cloud Native Buildpacks, Nixpacks |
 | **Git providers** | GitHub, GitLab, Bitbucket Cloud, Gitea, Forgejo, plus direct HTTPS/SSH Git URLs |
 | **Deployments** | Immutable releases, previews, readiness-first candidate activation, rollback, build/install commands, `sham.yaml` policy approval |
-| **Routing** | Per-site listeners, shared 80/443 edge routing, reverse proxying, domains, WebSockets, redirects, headers, SPA fallback |
+| **Routing** | Per-site listeners, private Node/process listeners for VPN-only services, shared 80/443 edge routing, reverse proxying, domains, WebSockets, redirects, headers, SPA fallback |
 | **Security** | Local firewall policy, CSP/security presets, TOTP, recovery codes, WebAuthn, OIDC SSO, encrypted secrets, scoped API tokens |
 | **Observability** | Runtime logs, traffic analytics, country/automated-client intelligence, health checks, CPU/memory/request/error/latency metrics, p50/p95 history, alert rules |
 | **Operations** | Environment variables, database profiles, jobs, snapshots, dependency scans, backups/restore, Cloudflare, Certbot, tunnels, signed updates |
@@ -156,6 +156,18 @@ app.listen(Number(process.env.PORT), process.env.HOST || '127.0.0.1');
 ```
 
 Configure an HTTP readiness probe such as `/health`. SHAM starts a candidate backend, waits for readiness, switches traffic, drains the old backend, and then completes activation.
+
+### Example: public app plus VPN-only admin listener
+
+A Node.js or managed-process site can expose a small number of additional **private HTTP listeners**. This is useful when one process serves a public application and an administration endpoint that must stay reachable only over a VPN or host-local network. Configure the extra listeners in **Site settings → Advanced → Private process listeners**:
+
+```json
+[
+  { "name": "admin", "port": 4101, "bindHost": "10.8.0.1", "portEnv": "ADMIN_PORT" }
+]
+```
+
+SHAM injects `ADMIN_PORT` with an internal port for the application and proxies `10.8.0.1:4101` to it; the normal `PORT` listener remains the site's public listener. Extra listeners may bind only to loopback, RFC1918/CGNAT IPv4, or ULA IPv6 addresses. They are deliberately not routed through the shared edge or Cloudflare Tunnel, and SHAM rejects using one as a Tunnel origin. Restrict the listener with your VPN and host firewall—SHAM does not provide VPN authentication—and use HTTPS or an encrypted VPN where the private network is not already trusted. SHAM does not auto-detect application ports: declare each private listener explicitly so it can validate readiness and keep exposure predictable. Docker and Compose sites do not support this feature.
 
 ### Example: repository manifest
 

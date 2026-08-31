@@ -81,6 +81,53 @@ function validateBindHost(value) {
   throw new Error('Bind address must be localhost or a valid IPv4/IPv6 address.');
 }
 
+function isPrivateListenerHost(host) {
+  if (host === 'localhost' || host === '::1' || host.startsWith('127.')) return true;
+  if (net.isIP(host) === 4) {
+    const parts = host.split('.').map(Number);
+    return parts[0] === 10
+      || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
+      || (parts[0] === 192 && parts[1] === 168)
+      || (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127);
+  }
+  return net.isIP(host) === 6 && /^(?:fc|fd)/i.test(host);
+}
+
+function validatePrivateListeners(value, { runtimeType, runtimeIsolation, primaryPort, runtimePortEnv }) {
+  let entries = value;
+  if (typeof entries === 'string') {
+    try { entries = entries.trim() ? JSON.parse(entries) : []; }
+    catch { throw new Error('Private listeners must be a JSON array.'); }
+  }
+  if (entries === undefined || entries === null || entries === '') entries = [];
+  if (!Array.isArray(entries) || entries.length > 4) throw new Error('A site can define at most four private listeners.');
+  if (entries.length && (runtimeType !== 'node' && runtimeType !== 'process')) throw new Error('Private listeners are supported only for Node.js and managed process runtimes.');
+  if (entries.length && runtimeIsolation !== 'process') throw new Error('Private listeners require process isolation; Docker and Compose port mappings remain intentionally restricted.');
+  const names = new Set();
+  const ports = new Set();
+  const environments = new Set();
+  return entries.map((entry, index) => {
+    if (!entry || Array.isArray(entry) || typeof entry !== 'object') throw new Error(`Private listener ${index + 1} must be an object.`);
+    for (const key of Object.keys(entry)) {
+      if (!['name', 'port', 'bindHost', 'bind_host', 'portEnv', 'port_env'].includes(key)) throw new Error(`Private listener ${index + 1} has an unsupported field: ${key}.`);
+    }
+    const name = String(entry.name || '').trim().toLowerCase();
+    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(name) || name === 'public' || names.has(name)) throw new Error(`Private listener ${index + 1} needs a unique lowercase name.`);
+    const port = strictInteger(entry.port, `Private listener ${name} port`);
+    if (port < 1 || port > 65535 || port === primaryPort || ports.has(port)) throw new Error(`Private listener ${name} needs a unique port between 1 and 65535 that differs from the public listener.`);
+    const bindHost = validateBindHost(entry.bindHost ?? entry.bind_host ?? '127.0.0.1');
+    if (!isPrivateListenerHost(bindHost)) throw new Error(`Private listener ${name} must bind to loopback, RFC1918/CGNAT IPv4, or a ULA IPv6 address; public bind addresses are not allowed.`);
+    const portEnv = String(entry.portEnv ?? entry.port_env ?? '').trim().toUpperCase();
+    if (!/^[A-Z_][A-Z0-9_]{0,127}$/.test(portEnv) || ['PORT', 'HOST'].includes(portEnv) || portEnv.startsWith('SHAM_') || portEnv === runtimePortEnv || environments.has(portEnv)) {
+      throw new Error(`Private listener ${name} needs a unique non-reserved port environment-variable name.`);
+    }
+    names.add(name);
+    ports.add(port);
+    environments.add(portEnv);
+    return { name, port, bindHost, portEnv };
+  });
+}
+
 function validateDomain(value) {
   const domain = String(value || '').trim().toLowerCase().replace(/\.$/, '');
   if (!domain) return '';
@@ -378,6 +425,11 @@ function validateSiteInput(body, defaults = {}) {
   const anubisPolicy = String(body.anubisPolicy ?? body.anubis_policy ?? defaults.anubis_policy ?? '');
   if (anubisPolicy.length > 256 * 1024 || anubisPolicy.includes('\0')) throw new Error('Anubis policy is too large or invalid.');
   if (anubisPolicy && /^metrics\s*:/m.test(anubisPolicy)) throw new Error('The top-level Anubis metrics section is managed by SHAM. Remove it from the custom policy.');
+  const runtimePortEnv = (() => { const value = String(body.runtimePortEnv ?? body.runtime_port_env ?? defaults.runtime_port_env ?? 'PORT').trim().toUpperCase(); if (!/^[A-Z_][A-Z0-9_]{0,127}$/.test(value)) throw new Error('Runtime port environment-variable name is invalid.'); return value; })();
+  const additionalListeners = validatePrivateListeners(
+    body.additionalListeners ?? body.additional_listeners ?? defaults.additional_listeners ?? defaults.additional_listeners_json ?? '[]',
+    { runtimeType, runtimeIsolation, primaryPort: port, runtimePortEnv }
+  );
 
   return {
     name,
@@ -395,7 +447,8 @@ function validateSiteInput(body, defaults = {}) {
     entry_file: safeRelativePath(body.entryFile ?? body.entry_file ?? defaults.entry_file ?? 'index.html', 'Entry file'),
     node_entry: safeRelativePath(body.nodeEntry ?? body.node_entry ?? defaults.node_entry ?? 'server.js', 'Node entry file'),
     start_command: startCommand,
-    runtime_port_env: (() => { const value = String(body.runtimePortEnv ?? body.runtime_port_env ?? defaults.runtime_port_env ?? 'PORT').trim().toUpperCase(); if (!/^[A-Z_][A-Z0-9_]{0,127}$/.test(value)) throw new Error('Runtime port environment-variable name is invalid.'); return value; })(),
+    runtime_port_env: runtimePortEnv,
+    additional_listeners: additionalListeners,
     working_directory: validateBuildOutput(body.workingDirectory ?? body.working_directory ?? defaults.working_directory ?? ''),
     install_dependencies: bool(body.installDependencies ?? body.install_dependencies, Boolean(defaults.install_dependencies)),
     minify: bool(body.minify, Boolean(defaults.minify)),
@@ -483,5 +536,6 @@ module.exports = {
   validateProxyHostHeader,
   validateBuildCommand,
   validateBuildOutput,
+  validatePrivateListeners,
   validateSiteInput
 };

@@ -60,6 +60,17 @@ test('site input supports Node.js runtime and minification settings', () => {
   assert.throws(() => validateSiteInput({ name: 'Bad', port: 4202, domain: 'not-a-domain' }));
 });
 
+test('private process listeners are explicit, private, and limited to managed processes', () => {
+  const site = validateSiteInput({
+    name: 'Private API', port: 4203, runtimeType: 'node', runtimeIsolation: 'process',
+    additionalListeners: [{ name: 'admin', port: 4204, bindHost: '10.8.0.1', portEnv: 'ADMIN_PORT' }]
+  });
+  assert.deepEqual(site.additional_listeners, [{ name: 'admin', port: 4204, bindHost: '10.8.0.1', portEnv: 'ADMIN_PORT' }]);
+  assert.throws(() => validateSiteInput({ name: 'Public private port', port: 4205, runtimeType: 'node', additionalListeners: [{ name: 'admin', port: 4206, bindHost: '0.0.0.0', portEnv: 'ADMIN_PORT' }] }), /public bind addresses/);
+  assert.throws(() => validateSiteInput({ name: 'Container listener', port: 4207, runtimeType: 'container', additionalListeners: [{ name: 'admin', port: 4208, bindHost: '127.0.0.1', portEnv: 'ADMIN_PORT' }] }), /supported only/);
+  assert.throws(() => validateSiteInput({ name: 'Reserved listener environment', port: 4209, runtimeType: 'node', additionalListeners: [{ name: 'admin', port: 4210, bindHost: '127.0.0.1', portEnv: 'PORT' }] }), /reserved/);
+});
+
 
 test('site input rejects partially numeric port and cache values', () => {
   assert.throws(() => validateSiteInput({ name: 'Bad port', port: '4100abc' }), /Port must be an integer/);

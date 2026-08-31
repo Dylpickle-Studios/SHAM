@@ -22,6 +22,7 @@
  * @property {'static' | 'node' | 'container' | 'compose' | 'proxy'} runtime_type
  * @property {'process' | 'docker'} runtime_isolation
  * @property {string} runtime_preset
+ * @property {SitePrivateListener[]} additional_listeners
  * @property {boolean} ssl_enabled
  * @property {boolean} edge_enabled
  * @property {boolean} cloudflare_enabled
@@ -65,6 +66,16 @@
  * @property {string} git_url
  * @property {string} runtime_manifest_hash
  * @property {string} runtime_manifest_approved_hash
+ */
+
+/**
+ * A private process listener. SHAM assigns the application-side port through
+ * `portEnv` and proxies it only on the private `bindHost:port` listener.
+ * @typedef {Object} SitePrivateListener
+ * @property {string} name
+ * @property {number} port
+ * @property {string} bindHost
+ * @property {string} portEnv
  */
 
 /**

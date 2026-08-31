@@ -14,7 +14,7 @@ function registerSiteRoutes(ctx) {
   const {
     app, requireAuth, requireAdmin, db, manager, cloudflareTunnels, net, recordAudit, performanceMonitor,
     uploadSizeGuard, multipart, receiveWebsite, receiveSingleFile, nextAvailableSitePort, validateSiteInput,
-    uniqueSlug, checkPort, installUploadAsync, SITES_DIR, fs, path, operationsManager, bool, writeSiteConfig,
+    uniqueSlug, checkPort, checkAdditionalListenerPorts, installUploadAsync, SITES_DIR, fs, path, operationsManager, bool, writeSiteConfig,
     requiredSiteFile, safeObfuscationWarning, uploadParts, auditObfuscationCompatibility, safeRelativePath,
     listSiteFilesAsync, readTextFileAsync, writeTextFileAsync, replaceSingleFileFromPathAsync, deleteSingleFileAsync,
     stageSingleFileDeletionAsync, snapshotManager, dependencyScanner,
@@ -257,6 +257,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
       if ((config.runtime_type === 'compose' || config.runtime_type === 'container' || config.runtime_isolation === 'docker' || config.anubis_enabled) && req.user.role !== 'admin') throw new Error('Docker-backed runtimes require an administrator account.');
       if (source === 'git' && !config.git_url) throw new Error('Choose a Git repository before deploying from Git.');
       checkPort(config.port);
+      checkAdditionalListenerPorts(config.additional_listeners);
       assertEdgeDomainAvailable(config);
       if (config.ssl_enabled && (!config.domain || !hasCertificate(config.domain))) {
         throw new Error('Issue a certificate before enabling SSL.');
@@ -277,7 +278,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
 
       const result = db.prepare(`
         INSERT INTO sites (
-          name, slug, directory_name, bind_host, port, runtime_type, runtime_preset, start_command, runtime_port_env, working_directory, proxy_target, proxy_host_header, proxy_timeout_ms,
+          name, slug, directory_name, bind_host, port, runtime_type, runtime_preset, start_command, runtime_port_env, additional_listeners_json, working_directory, proxy_target, proxy_host_header, proxy_timeout_ms,
           install_command, build_command, build_output_dir, entry_file, node_entry,
           install_dependencies, minify, obfuscate, obfuscation_risk_acknowledged,
           domain_only, spa_fallback, cache_seconds, headers_json, enabled, domain,
@@ -291,7 +292,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
           maintenance_html, redirects_json, error_pages_json, cache_rules_json,
           release_mode, git_url, git_branch, preview_domain, created_by
         ) VALUES (
-          @name, @slug, @directoryName, @bindHost, @port, @runtimeType, @runtimePreset, @startCommand, @runtimePortEnv, @workingDirectory, @proxyTarget, @proxyHostHeader, @proxyTimeoutMs,
+          @name, @slug, @directoryName, @bindHost, @port, @runtimeType, @runtimePreset, @startCommand, @runtimePortEnv, @additionalListenersJson, @workingDirectory, @proxyTarget, @proxyHostHeader, @proxyTimeoutMs,
           @installCommand, @buildCommand, @buildOutputDir, @entryFile, @nodeEntry,
           @installDependencies, @minify, @obfuscate, @obfuscationRiskAcknowledged,
           @domainOnly, @spaFallback, @cacheSeconds, @headersJson, 0, @domain,
@@ -315,6 +316,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
         runtimePreset: config.runtime_preset,
         startCommand: config.start_command,
         runtimePortEnv: config.runtime_port_env,
+        additionalListenersJson: JSON.stringify(config.additional_listeners || []),
         workingDirectory: config.working_directory,
         proxyTarget: config.proxy_target,
         proxyHostHeader: config.proxy_host_header,
@@ -473,6 +475,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
         throw new Error('Docker-backed runtime settings require an administrator account.');
       }
       checkPort(config.port, site.id);
+      checkAdditionalListenerPorts(config.additional_listeners, site.id);
       assertEdgeDomainAvailable(config, site.id);
       assertTunnelOnlyBinding(config, site.id);
       config.slug = uniqueSlug(config.slug, site.id);

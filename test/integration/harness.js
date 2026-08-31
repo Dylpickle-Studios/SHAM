@@ -57,7 +57,7 @@ function staticFileServer(root) {
 }
 
 class ShamHarness {
-  constructor({ appRoot = ROOT, dataDir = '' } = {}) {
+  constructor({ appRoot = ROOT, dataDir = '', fixture = 'node-v1' } = {}) {
     this.appRoot = appRoot;
     this.suppliedDataDir = dataDir;
     this.dataDir = '';
@@ -73,6 +73,7 @@ class ShamHarness {
     this.gitBare = '';
     this.gitServer = null;
     this.gitUrl = '';
+    this.fixture = fixture;
   }
 
   async start({ docker = false, register = true } = {}) {
@@ -189,7 +190,7 @@ class ShamHarness {
     this.gitWorktree = path.join(this.gitRoot, 'work');
     this.gitBare = path.join(this.gitRoot, 'fixture.git');
     await fs.mkdir(this.gitWorktree);
-    await fs.cp(path.join(FIXTURES, 'node-v1'), this.gitWorktree, { recursive: true });
+    await fs.cp(path.join(FIXTURES, this.fixture), this.gitWorktree, { recursive: true });
     await run('git', ['init', '--initial-branch=main'], { cwd: this.gitWorktree });
     await run('git', ['config', 'user.email', 'integration@example.test'], { cwd: this.gitWorktree });
     await run('git', ['config', 'user.name', 'SHAM integration'], { cwd: this.gitWorktree });
@@ -260,7 +261,7 @@ class ShamHarness {
     this.gitUrl = `http://127.0.0.1:${this.gitServer.address().port}/fixture.git`;
   }
 
-  async createNodeSite({ name = 'integration-node', domain = 'node.integration.test', enabled = true } = {}) {
+  async createNodeSite({ name = 'integration-node', domain = 'node.integration.test', enabled = true, additionalListeners = [] } = {}) {
     const sitePort = await freePort();
     const result = await this.request('/api/sites', {
       method: 'POST',
@@ -268,7 +269,7 @@ class ShamHarness {
         name, port: sitePort, runtimeType: 'node', nodeEntry: 'server.js', enabled,
         edgeEnabled: true, domain, gitUrl: this.gitUrl, gitBranch: 'main', source: 'git',
         readinessType: 'http', readinessPath: '/health', healthCheckType: 'http', healthCheckPath: '/health',
-        startupTimeoutSeconds: 3, blueGreenDrainSeconds: 0
+        startupTimeoutSeconds: 3, blueGreenDrainSeconds: 0, additionalListeners
       }
     });
     return result.site;

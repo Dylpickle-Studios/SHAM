@@ -634,7 +634,13 @@ exports.activate = ({ data, settings, log }) =&gt; ({
           <label id="site-compose-service-row"><span>Application service</span><input id="site-compose-service" value="app"></label>
           <p id="site-container-runtime-note" class="notice span-2" hidden>Dockerfile, Buildpack and Nixpacks deployments build an immutable candidate image before traffic switches. Docker Compose rejects privileged containers, host namespaces, devices, added capabilities, Docker socket mounts, host bind mounts, and unmanaged auxiliary host ports. SHAM automatically publishes the selected application service to loopback on host installs when no port is declared. Do not publish auxiliary service ports. Use named volumes for persistent Compose data.</p>
         </div>
-                <div id="proxy-fields" class="subgrid span-2" hidden>
+        <details id="site-private-listener-options" class="advanced-section span-2" hidden>
+          <summary><span><strong>Private process listeners</strong><small>Optional VPN/loopback-only HTTP listeners for a Node.js or managed process. They are never routed through the shared edge or Cloudflare Tunnel.</small></span><span class="details-indicator">＋</span></summary>
+          <div class="advanced-content form-grid">
+            <label class="span-2"><span>Private listeners (JSON)</span><textarea id="site-private-listeners" rows="4" spellcheck="false">[]</textarea><small>Example: <code>[{"name":"admin","port":4101,"bindHost":"10.8.0.1","portEnv":"ADMIN_PORT"}]</code>. Bind addresses are limited to loopback, RFC1918/CGNAT IPv4, or ULA IPv6. SHAM injects the internal application port through <code>portEnv</code>; the declared port is the VPN/host listener.</small></label>
+          </div>
+        </details>
+        <div id="proxy-fields" class="subgrid span-2" hidden>
           <label class="span-2"><span>Upstream URL</span><input id="site-proxy-target" autocomplete="off" placeholder="http://192.168.1.40:2283"><small>HTTP or HTTPS service reachable from the SHAM host.</small></label>
           <label><span>Host header override</span><input id="site-proxy-host-header" autocomplete="off" placeholder="app.internal.example"><small>Optional. Leave blank to use the upstream URL host.</small></label>
           <label><span>Upstream timeout (ms)</span><input id="site-proxy-timeout" type="number" min="1000" max="300000" value="30000"><small>Applies to HTTP and WebSocket proxy operations.</small></label>

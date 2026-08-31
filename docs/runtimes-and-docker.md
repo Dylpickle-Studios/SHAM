@@ -43,6 +43,20 @@ SHAM allocates an internal application port and supplies:
 
 Server applications should bind the injected host/port. Do not casually bind generated host-process applications to `0.0.0.0`, because that can make the internal backend directly reachable outside SHAM's public listener boundary.
 
+### Public and private listeners in one process
+
+Node and managed-process sites running with **process** isolation may declare up to four additional private HTTP listeners in **Site settings → Advanced → Private process listeners**. Each entry is explicit JSON:
+
+```json
+[
+  { "name": "admin", "port": 4101, "bindHost": "10.8.0.1", "portEnv": "ADMIN_PORT" }
+]
+```
+
+`port` and `bindHost` describe SHAM's external listener; `portEnv` is the environment variable through which SHAM supplies a separate internal application port. The application should listen on that injected value, for example `app.listen(Number(process.env.ADMIN_PORT), '127.0.0.1')`. SHAM verifies the additional backend listener with TCP readiness before declaring the runtime healthy, and preserves it across start, stop, restart, deployment promotion, and rollback.
+
+Private listener bind addresses are restricted to loopback, RFC1918/CGNAT IPv4, or ULA IPv6. They are not eligible for shared-edge routing or Cloudflare Tunnel origins, so the primary `PORT` listener remains the only public route. SHAM intentionally does not auto-detect process ports: explicit declarations prevent accidental exposure and make readiness deterministic. These listeners are HTTP proxies; use a VPN, firewall, and appropriate transport encryption for the private network. Docker and Compose runtimes are not supported.
+
 ### Custom process commands
 
 Use Custom when a server can run as a normal foreground process. Repository manifests can provide either a command string or a structured argv array. Structured arrays are safer for arguments containing whitespace because SHAM does not need to reconstruct shell quoting.

@@ -362,10 +362,28 @@ function checkPort(port, excludedId = null) {
     ? db.prepare('SELECT id, name FROM sites WHERE port = ? AND id != ?').get(port, excludedId)
     : db.prepare('SELECT id, name FROM sites WHERE port = ?').get(port);
   if (row) throw new Error(`Port ${port} is already assigned to “${row.name}”.`);
+  const sites = excludedId
+    ? db.prepare('SELECT name, additional_listeners_json FROM sites WHERE id != ?').all(excludedId)
+    : db.prepare('SELECT name, additional_listeners_json FROM sites').all();
+  for (const site of sites) {
+    let listeners = [];
+    try { listeners = JSON.parse(site.additional_listeners_json || '[]'); } catch { /* Ignore malformed legacy JSON. */ }
+    if (Array.isArray(listeners) && listeners.some((listener) => Number(listener?.port) === Number(port))) {
+      throw new Error(`Port ${port} is already assigned to private listener on “${site.name}”.`);
+    }
+  }
+}
+
+function checkAdditionalListenerPorts(listeners, excludedId = null) {
+  for (const listener of listeners || []) checkPort(Number(listener.port), excludedId);
 }
 
 function nextAvailableSitePort() {
-  const used = new Set(db.prepare('SELECT port FROM sites').all().map((row) => Number(row.port)));
+  const used = new Set();
+  for (const row of db.prepare('SELECT port, additional_listeners_json FROM sites').all()) {
+    used.add(Number(row.port));
+    try { for (const listener of JSON.parse(row.additional_listeners_json || '[]')) used.add(Number(listener?.port)); } catch { /* Ignore malformed legacy JSON. */ }
+  }
   for (let port = 4100; port <= 65535; port += 1) {
     if (port === DASHBOARD_PORT || port === EDGE_HTTP_PORT || port === EDGE_HTTPS_PORT || used.has(port)) continue;
     return port;
@@ -376,7 +394,7 @@ function nextAvailableSitePort() {
 function writeSiteConfig(id, config) {
   db.prepare(`
     UPDATE sites SET
-      name = ?, slug = ?, bind_host = ?, port = ?, runtime_type = ?, runtime_preset = ?, start_command = ?, runtime_port_env = ?, working_directory = ?, proxy_target = ?, proxy_host_header = ?, proxy_timeout_ms = ?, install_command = ?, build_command = ?, build_output_dir = ?, entry_file = ?,
+      name = ?, slug = ?, bind_host = ?, port = ?, runtime_type = ?, runtime_preset = ?, start_command = ?, runtime_port_env = ?, additional_listeners_json = ?, working_directory = ?, proxy_target = ?, proxy_host_header = ?, proxy_timeout_ms = ?, install_command = ?, build_command = ?, build_output_dir = ?, entry_file = ?,
       node_entry = ?, install_dependencies = ?, minify = ?, obfuscate = ?, obfuscation_risk_acknowledged = ?, domain_only = ?, spa_fallback = ?,
       cache_seconds = ?, headers_json = ?, domain = ?, ssl_enabled = ?,
       cloudflare_enabled = ?, firewall_enabled = ?, firewall_json = ?, compression = ?, security_preset = ?, csp = ?,
@@ -395,6 +413,7 @@ function writeSiteConfig(id, config) {
     config.runtime_preset,
     config.start_command,
     config.runtime_port_env,
+    JSON.stringify(config.additional_listeners || []),
     config.working_directory,
     config.proxy_target,
     config.proxy_host_header,
@@ -620,7 +639,7 @@ function cloudflarePortWarning(site) {
 const routeContext = {
   app, requireAuth, requireAdmin, db, manager, cloudflareTunnels, net, recordAudit, performanceMonitor,
   uploadSizeGuard, multipart, receiveWebsite, receiveSingleFile, nextAvailableSitePort, validateSiteInput, uniqueSlug,
-  checkPort, installUploadAsync, SITES_DIR, fs, path, operationsManager, bool, writeSiteConfig, requiredSiteFile,
+  checkPort, checkAdditionalListenerPorts, installUploadAsync, SITES_DIR, fs, path, operationsManager, bool, writeSiteConfig, requiredSiteFile,
   safeObfuscationWarning, uploadParts, auditObfuscationCompatibility, safeRelativePath, listSiteFilesAsync,
   readTextFileAsync, writeTextFileAsync, replaceSingleFileFromPathAsync, deleteSingleFileAsync, stageSingleFileDeletionAsync,
   snapshotManager, dependencyScanner, edgeProxy, getSetting, siteRows, getSiteOr404,

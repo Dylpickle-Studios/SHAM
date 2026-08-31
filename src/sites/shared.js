@@ -238,11 +238,13 @@ function hydrateSite(row) {
   let redirects;
   let errorPages;
   let cacheRules;
+  let additionalListeners;
   try { headers = JSON.parse(row.headers_json || '{}'); } catch { headers = {}; }
   try { firewall = JSON.parse(row.firewall_json || '{}'); } catch { firewall = {}; }
   try { redirects = JSON.parse(row.redirects_json || '[]'); } catch { redirects = []; }
   try { errorPages = JSON.parse(row.error_pages_json || '{}'); } catch { errorPages = {}; }
   try { cacheRules = JSON.parse(row.cache_rules_json || '[]'); } catch { cacheRules = []; }
+  try { additionalListeners = JSON.parse(row.additional_listeners_json || '[]'); } catch { additionalListeners = []; }
   return {
     ...row,
     enabled: Boolean(row.enabled),
@@ -266,6 +268,7 @@ function hydrateSite(row) {
     runtime_preset: row.runtime_preset || (row.runtime_type === 'node' ? 'node' : row.runtime_type === 'container' ? row.container_mode || 'image' : ''),
     start_command: row.start_command || '',
     runtime_port_env: row.runtime_port_env || 'PORT',
+    additional_listeners: Array.isArray(additionalListeners) ? additionalListeners : [],
     working_directory: row.working_directory || '',
     readiness_type: row.readiness_type || 'tcp',
     readiness_path: row.readiness_path || '/',
