@@ -81,7 +81,7 @@ test('connected Git providers can synchronize push webhooks without exposing pro
 test('site creation keeps ports and risky asset transforms out of the normal wizard path', () => {
   const html = source('public/index.html');
   const css = source('public/styles.css');
-  assert.match(html, /class="advanced-only"[^>]*><span class="field-label">Port/);
+  assert.match(html, /class="advanced-only"[^>]*><span class="field-label">(?:Listener )?port/i);
   assert.match(html, /id="asset-transform-options"/);
   assert.match(html, /data-site-template="next">Next\.js/);
   assert.match(css, /data-wizard-step="2"[^\n]*\.advanced-only/);

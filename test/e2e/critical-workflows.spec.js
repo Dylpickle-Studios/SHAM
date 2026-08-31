@@ -25,6 +25,10 @@ async function login(page) {
 }
 
 async function openWorkspace(page) {
+  if (await page.locator('#mobile-menu').isVisible()) {
+    await page.getByRole('button', { name: 'Open navigation' }).click();
+    await expect(page.locator('#sidebar')).toHaveClass(/open/);
+  }
   await page.getByRole('button', { name: 'Sites' }).click();
   const card = page.locator('.site-card').filter({ hasText: siteName });
   await expect(card).toBeVisible();
