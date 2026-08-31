@@ -4,6 +4,27 @@ All notable public changes to SHAM are documented here. The project follows Sema
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-08-31
+
+### Added
+
+- Node.js and managed-process sites can declare up to four explicit private
+  HTTP listeners. SHAM supplies an internal application port through a named
+  environment variable, verifies its readiness, and preserves the listener
+  through deploys, rollbacks, and runtime lifecycle operations.
+
+### Security
+
+- Private process listeners are limited to loopback, RFC1918/CGNAT IPv4, or
+  ULA IPv6 bindings and cannot be selected as Cloudflare Tunnel origins,
+  preventing an accidental VPN-only administration endpoint from being
+  published through the shared edge or Tunnel.
+
+### Changed
+
+- The upgrade compatibility drill now uses the unmodified `v1.1.2` public
+  release as its required stable baseline for this release line.
+
 ## [1.1.2] — 2026-08-27
 
 ### Security

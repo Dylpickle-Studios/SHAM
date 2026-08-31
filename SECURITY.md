@@ -4,7 +4,7 @@
 
 | Version | Supported |
 | --- | --- |
-| 1.1.x (current release line) | Yes |
+| 1.2.x (current release line) | Yes |
 | Older internal builds | No |
 
 SHAM supports the current release line. Security fixes are made on the latest

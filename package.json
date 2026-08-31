@@ -1,6 +1,6 @@
 {
   "name": "simple-hosting-and-more",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "SHAM is a self-hosted deployment control plane for static sites, managed processes, OCI containers, Docker Compose applications, and reverse-proxied services.",
   "main": "src/bootstrap.js",
   "type": "commonjs",

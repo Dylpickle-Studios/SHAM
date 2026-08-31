@@ -5,7 +5,7 @@
 <h1 align="center">SHAM — Simple Hosting And More</h1>
 
 <p align="center"><strong>A self-hosted deployment, runtime, and operations control plane for websites and application servers.</strong></p>
-<p align="center"><strong>Current release: 1.1.2</strong> · <strong>AGPL-3.0-or-later</strong></p>
+<p align="center"><strong>Current release: 1.2.0</strong> · <strong>AGPL-3.0-or-later</strong></p>
 
 SHAM provides one browser dashboard for deploying applications, routing traffic, managing releases, operating runtimes, inspecting performance, and handling common infrastructure tasks on servers you control.
 

@@ -9,32 +9,11 @@ const Database = require('better-sqlite3');
 const { ShamHarness, ROOT, run, waitFor } = require('./harness');
 
 const enabled = process.env.SHAM_RUN_INTEGRATION === '1';
-// v1.1.1 is the stable predecessor to v1.1.2 and predates the supported
-// Runtime Agent layout. Keeping the baseline explicit makes this a repeatable
-// compatibility contract rather than an accidental choice based on tag
-// ordering. Set SHAM_UPGRADE_FROM when preparing a future release line.
-const DEFAULT_UPGRADE_FROM = 'v1.1.1';
-
-async function repairKnownBaselinePackagingDefect(checkout, tag) {
-  const corePath = path.join(checkout, 'src', 'sites', 'core.js');
-  const compatibilityPath = path.join(checkout, 'src', 'sites', 'config.js');
-  const repairs = [];
-  try {
-    const source = await fs.readFile(corePath, 'utf8');
-    if (source.includes("require('./config')")) {
-      try { await fs.access(compatibilityPath); }
-      catch {
-        // The v1.1.1 tag contains a bad relative import in src/sites/core.js.
-        await fs.writeFile(compatibilityPath, "'use strict';\nmodule.exports = require('../config');\n", { flag: 'wx' });
-        repairs.push(`${tag}:src/sites/config.js`);
-      }
-    }
-  } catch { /* A differently structured override tag needs no core repair. */ }
-
-  // These repairs only make the disposable tagged checkout executable. They
-  // do not replace or alter its database/runtime migrations or persisted data.
-  return repairs;
-}
+// v1.1.2 is the stable predecessor to v1.2.0. Keeping the baseline explicit
+// makes this a repeatable compatibility contract rather than an accidental
+// choice based on tag ordering. Set SHAM_UPGRADE_FROM when preparing a future
+// release line.
+const DEFAULT_UPGRADE_FROM = 'v1.1.2';
 
 async function supportedReleaseCheckout() {
   const checkout = await fs.mkdtemp(path.join(os.tmpdir(), 'sham-upgrade-baseline-'));
@@ -51,11 +30,10 @@ async function supportedReleaseCheckout() {
   await run('git', ['archive', '--format=tar', '-o', archive, ref], { cwd: ROOT });
   await run('tar', ['-xf', archive, '-C', checkout]);
   await fs.rm(archive, { force: true });
-  const compatibilityRepairs = await repairKnownBaselinePackagingDefect(checkout, tag);
   // Install the release's own locked dependency graph. Sharing current
   // node_modules can hide a genuine upgrade compatibility problem.
   await run('npm', ['ci', '--no-fund', '--no-audit'], { cwd: checkout, env: { ...process.env, npm_config_update_notifier: 'false' } });
-  return { checkout, ref, tag, compatibilityRepairs };
+  return { checkout, ref, tag };
 }
 
 function sqliteQuickCheck(dataDir) {
@@ -81,16 +59,10 @@ test('upgrade from the last supported stable release preserves releases, secrets
   }
   const sham = new ShamHarness({ appRoot: legacy.checkout });
   try {
-    if (legacy.tag === 'v1.1.1') {
-      assert.deepEqual(legacy.compatibilityRepairs, ['v1.1.1:src/sites/config.js'], 'the known v1.1.1 packaging repair must remain narrowly scoped');
-    }
     await sham.start();
     await sham.useSmartGitHttp();
     const site = await sham.createNodeSite({ name: 'upgrade-site', domain: 'upgrade.integration.test' });
-    // v1.1.1's edge proxy omits a shared requestHostname export. Verify the
-    // tagged runtime through its real site listener before upgrading; after
-    // current SHAM reconciles the state, traffic is verified through the edge.
-    await sham.waitForSite(site.port, 'SHAM_TEST_VERSION_1');
+    await sham.waitForEdge(site.domain, 'SHAM_TEST_VERSION_1');
     await sham.request(`/api/sites/${site.id}/environment`, {
       method: 'PUT', body: { variables: [{ key: 'RECOVERY_SECRET', value: 'upgrade-secret-value', secret: true, scope: 'runtime' }] }
     });

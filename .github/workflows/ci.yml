@@ -117,7 +117,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7.0.1
         with:
-          # The upgrade drill archives the v1.1.1 public stable release and
+          # The upgrade drill archives the v1.1.2 public stable release and
           # boots it against isolated state before upgrading to this checkout.
           fetch-depth: 0
 
@@ -133,7 +133,7 @@ jobs:
       - name: Run real deployment lifecycle and Compose tests
         env:
           SHAM_REQUIRE_UPGRADE_BASELINE: '1'
-          SHAM_UPGRADE_FROM: v1.1.1
+          SHAM_UPGRADE_FROM: v1.1.2
         run: npm run test:integration
 
       - name: Collect Docker diagnostics on failure
