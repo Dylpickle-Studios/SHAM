@@ -10,7 +10,8 @@ test('Git deployment switches traffic, preserves a failed candidate, rolls back,
   const sham = await new ShamHarness().start();
   t.after(() => sham.close());
   try {
-    const site = await sham.createNodeSite();
+    const site = await sham.createNodeSite({ port: '' });
+    assert.ok(Number.isSafeInteger(Number(site.port)) && Number(site.port) > 0, 'edge-published sites receive an internal listener port when none is supplied');
     await sham.waitForEdge(site.domain, 'SHAM_TEST_VERSION_1');
 
     await sham.publishFixture('node-v2', 'version 2');

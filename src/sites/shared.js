@@ -186,13 +186,19 @@ function trustedEdgePeer(ip) {
   return Boolean(version && trustedEdgePeers.check(ip, version === 6 ? 'ipv6' : 'ipv4'));
 }
 
-function requestIdentity(site, req) {
+function requestIdentity(site, req, { trustLocalCloudflareTunnel = false } = {}) {
   if (req[REQUEST_IDENTITY]) return req[REQUEST_IDENTITY];
   const peerIp = normalizeIp(req.socket?.remoteAddress);
   const suppliedEdgeToken = String(req.headers['x-sham-edge-token'] || '');
   const trustedInternalEdge = suppliedEdgeToken.length === INTERNAL_EDGE_TOKEN.length
     && crypto.timingSafeEqual(Buffer.from(suppliedEdgeToken), Buffer.from(INTERNAL_EDGE_TOKEN));
-  const trustCloudflare = !trustedInternalEdge && site.cloudflare_enabled && trustedEdgePeer(peerIp);
+  // cloudflared is launched by SHAM and can only use a loopback origin. An
+  // enabled tunnel route therefore gives the shared edge a narrow, local path
+  // for accepting Cloudflare's visitor headers without trusting every local
+  // request or a broad private network. Other proxy peers still require both
+  // explicit configuration and Cloudflare integration on the site.
+  const trustedLocalTunnel = trustLocalCloudflareTunnel && (peerIp === '127.0.0.1' || peerIp === '::1');
+  const trustCloudflare = !trustedInternalEdge && (trustedLocalTunnel || (site.cloudflare_enabled && trustedEdgePeer(peerIp)));
   const forwardedIp = trustedInternalEdge ? normalizeIp(req.headers['x-sham-client-ip']) : 'unknown';
   const cloudflareIp = trustCloudflare ? normalizeIp(req.headers['cf-connecting-ip']) : 'unknown';
   const ip = forwardedIp !== 'unknown' ? forwardedIp : cloudflareIp !== 'unknown' ? cloudflareIp : peerIp;

@@ -117,6 +117,7 @@ function openSiteWorkspace(site, tab = 'overview') {
   status.textContent = site.runtime.error ? 'Error' : site.runtime.running ? 'Running' : 'Stopped';
   status.className = `status-pill ${site.runtime.error ? 'error' : site.runtime.running ? 'running' : ''}`;
   $('#site-workspace-restart').hidden = !site.runtime.running || site.runtime_type === 'static';
+  $('#site-workspace-install').hidden = !((site.runtime_type === 'node' && site.runtime_isolation !== 'docker') || (site.runtime_type === 'process' && ['node', 'npm'].includes(site.runtime_preset)));
   renderWorkspaceOverview(site);
   showSection('site-workspace', { refresh: false });
   selectWorkspaceTab(tab);
@@ -138,6 +139,7 @@ $$('[data-site-workspace-tab]').forEach((button) => {
 $('#site-workspace-back').addEventListener('click', () => showSection('sites'));
 $('#site-workspace-open').addEventListener('click', () => window.open($('#site-workspace-open').dataset.url, '_blank', 'noopener'));
 $('#site-workspace-restart').addEventListener('click', async (event) => { const site = currentWorkspaceSite(); if (site) await handleSiteAction(site, 'restart', event.currentTarget); });
+$('#site-workspace-install').addEventListener('click', async (event) => { const site = currentWorkspaceSite(); if (site) await handleSiteAction(site, 'install-fresh', event.currentTarget); });
 $('#workspace-refresh-logs').addEventListener('click', () => { const site = currentWorkspaceSite(); if (site) loadWorkspaceLogs(site); });
 $('#workspace-open-files').addEventListener('click', () => { const site = currentWorkspaceSite(); if (site) openFiles(site); });
 $('#workspace-edit-site').addEventListener('click', () => { const site = currentWorkspaceSite(); if (site) openEditSite(site); });
@@ -213,13 +215,14 @@ async function handleSiteAction(site, action, button) {
     } catch (error) { toast(error.message, 'error'); setBusy(button, false); }
     return;
   }
-  const labels = { toggle: site.runtime.running ? 'Stopping…' : 'Starting…', restart: 'Restarting…', install: 'Installing…', cloudflare: 'Syncing DNS…', 'cloudflare-firewall': 'Syncing firewall…', certificate: 'Issuing…', 'certificate-wildcard': 'Issuing wildcard…' };
+  if (action === 'install-fresh' && !(await requestAction({ title: 'Reinstall production dependencies?', message: 'SHAM will stop the site if needed, remove node_modules, run npm ci when a lockfile exists (otherwise npm install), then restart it. A rollback snapshot is created first.', confirmLabel: 'Fresh install', danger: true }))) return;
+  const labels = { toggle: site.runtime.running ? 'Stopping…' : 'Starting…', restart: 'Restarting…', 'install-fresh': 'Installing…', cloudflare: 'Syncing DNS…', 'cloudflare-firewall': 'Syncing firewall…', certificate: 'Issuing…', 'certificate-wildcard': 'Issuing wildcard…' };
   setBusy(button, true, labels[action] || 'Working…');
   try {
     if (action === 'toggle') await api(`/api/sites/${site.id}/toggle`, { method: 'PATCH', body: { enabled: !site.runtime.running } });
     if (action === 'restart') await api(`/api/sites/${site.id}/restart`, { method: 'POST' });
-    if (action === 'install') {
-      const result = await api(`/api/sites/${site.id}/npm-install`, { method: 'POST' });
+    if (action === 'install-fresh') {
+      const result = await api(`/api/sites/${site.id}/npm-install`, { method: 'POST', body: { fresh: true } });
       const snapshotNote = result.rollbackSnapshot ? ` Rollback snapshot #${result.rollbackSnapshot.id} was retained.` : '';
       toast(`${result.warning || result.message}${snapshotNote}`, result.warning ? 'warning' : 'success');
     }

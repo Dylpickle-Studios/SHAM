@@ -227,6 +227,8 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
   app.get('/api/runtime-logs', requireAuth, (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 2000);
     const siteId = Number(req.query.siteId);
+    manager.flushOutputLogs(Number.isSafeInteger(siteId) && siteId > 0 ? siteId : null);
+    manager.flushRuntimeLogs();
     const rows = Number.isSafeInteger(siteId) && siteId > 0
       ? db.prepare('SELECT id, site_id AS siteId, level, message, context_json AS contextJson, created_at AS createdAt FROM runtime_logs WHERE site_id = ? ORDER BY id DESC LIMIT ?').all(siteId, limit)
       : db.prepare('SELECT id, site_id AS siteId, level, message, context_json AS contextJson, created_at AS createdAt FROM runtime_logs ORDER BY id DESC LIMIT ?').all(limit);
@@ -470,7 +472,12 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
     if (!site) return;
     const wasRunning = manager.statusFor(site.id).running;
     try {
-      const config = validateSiteInput(req.body, site);
+      // An edge-published site already has a safe private listener. Treat an
+      // empty editor field as "keep it" rather than making operators invent a
+      // direct port just to change unrelated edge configuration.
+      const input = { ...req.body };
+      if (input.port === '' && bool(input.edgeEnabled ?? input.edge_enabled, Boolean(site.edge_enabled))) input.port = site.port;
+      const config = validateSiteInput(input, site);
       if ((config.runtime_type === 'compose' || config.runtime_type === 'container' || config.runtime_isolation === 'docker' || config.anubis_enabled) && req.user.role !== 'admin') {
         throw new Error('Docker-backed runtime settings require an administrator account.');
       }
@@ -603,6 +610,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
     const site = getSiteOr404(req, res);
     if (!site) return;
     const wasRunning = manager.statusFor(site.id).running;
+    const fresh = bool(req.body?.fresh, false);
     let rollbackSnapshot;
     try {
       const npmLikeHostRuntime = (site.runtime_type === 'node' && site.runtime_isolation !== 'docker')
@@ -611,7 +619,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
       rollbackSnapshot = await snapshotManager.create(site, 'Automatic pre-npm-install rollback');
       if (wasRunning) await manager.stop(site.id);
       try {
-        await manager.runInstall(site);
+        await manager.runInstall(site, { fresh });
       } catch (error) {
         if (wasRunning && !manager.statusFor(site.id).running) {
           try { await manager.start(site.id); } catch { /* Preserve the install error. */ }
@@ -627,8 +635,8 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
           manager.log(site.id, 'error', warning);
         }
       }
-      recordAudit(req.user.id, 'site.npm.install', { id: site.id, restartWarning: Boolean(warning) });
-      res.json({ site: manager.decorate(manager.getSite(site.id)), message: 'npm install completed.', warning, rollbackSnapshot });
+      recordAudit(req.user.id, 'site.npm.install', { id: site.id, fresh, restartWarning: Boolean(warning) });
+      res.json({ site: manager.decorate(manager.getSite(site.id)), message: fresh ? 'Fresh npm dependency install completed.' : 'npm install completed.', warning, rollbackSnapshot });
     } catch (error) {
       res.status(400).json({ error: error.message });
     }

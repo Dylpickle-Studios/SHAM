@@ -233,8 +233,8 @@ class SiteManager extends DeliverySiteManager {
       }
       const child = shellCommand(spec.command, { cwd, env });
       const prefix = `${options.preview ? 'preview' : spec.preset || 'process'}: `;
-      lineLogger(child.stdout, (line) => this.log(site.id, 'info', `${prefix}${line}`));
-      lineLogger(child.stderr, (line) => this.log(site.id, 'error', `${prefix}${line}`));
+      lineLogger(child.stdout, (line) => this.logOutput(site.id, 'info', `${prefix}${line}`));
+      lineLogger(child.stderr, (line) => this.logOutput(site.id, 'error', `${prefix}${line}`));
       const backend = { driver: 'process', child, internalHost: '127.0.0.1', internalPort: port, target: `http://127.0.0.1:${port}`, additionalListeners: privateListeners, cwd, env, spec, root, active: false, stopping: false, site };
       this.bindBackendExit(site, backend);
       try {
@@ -298,7 +298,7 @@ class SiteManager extends DeliverySiteManager {
       });
       containerStarted = true;
       if (!containerizedControlPlane) internalPort = await client.containerPort({ name, containerPort: spec.container.port });
-      const logHandle = await client.streamContainerLogs({ name, onLine: (level, line) => this.log(site.id, level, `container: ${line}`) });
+      const logHandle = await client.streamContainerLogs({ name, onLine: (level, line) => this.logOutput(site.id, level, `container: ${line}`) });
       backend = { driver: 'container', containerName: name, containerId, managedImage: managedImage ? image : null, logHandle, internalHost, internalPort, target: `http://${hostForUrl(internalHost)}:${internalPort}`, cwd: root, env, spec, root, active: false, stopping: false, site };
       this.bindDockerBackendExit(site, backend, name);
       await this.waitBackendReadiness(site, backend, spec);
@@ -361,7 +361,7 @@ class SiteManager extends DeliverySiteManager {
     let backend = null;
     const client = getRuntimeClient();
     try {
-      await client.composeUp({ project, files: composeFiles, cwd: root, env, service: spec.compose.service, containerPort: spec.compose.port, onLine: (level, line) => this.log(site.id, level, `compose: ${line}`) });
+      await client.composeUp({ project, files: composeFiles, cwd: root, env, service: spec.compose.service, containerPort: spec.compose.port, onLine: (level, line) => this.logOutput(site.id, level, `compose: ${line}`) });
       started = true;
       const containerId = await client.composePs({ project, files: composeFiles, cwd: root, env, service: spec.compose.service });
       if (!containerId) throw new Error(`Compose service ${spec.compose.service} did not create a container.`);
@@ -421,6 +421,7 @@ class SiteManager extends DeliverySiteManager {
     const runtime = this.running.get(site.id);
     if (!runtime || runtime.backend !== backend) return;
     const message = `${backend.driver} runtime exited${Number.isInteger(code) ? ` with code ${code}` : ''}${signal ? ` after ${signal}` : ''}.`;
+    this.flushOutputLogs(site.id);
     this.errors.set(site.id, message);
     this.log(site.id, 'error', message);
     backend.active = false;
@@ -804,6 +805,7 @@ class SiteManager extends DeliverySiteManager {
     if (timer) { clearTimeout(timer); this.restartTimers.delete(numericId); }
     if (this.starting.has(numericId)) { try { await this.starting.get(numericId); } catch { /* failed */ } }
     const runtime = this.running.get(numericId);
+    this.flushOutputLogs(numericId);
     if (!runtime) { this.errors.delete(numericId); this.db.prepare('DELETE FROM runtime_instances WHERE site_id = ?').run(numericId); return; }
     runtime.stopping = true;
     await this.operations?.beforeSiteStop(this.getSite(numericId) || { id: numericId }, runtime).catch((error) => this.log(numericId, 'error', `Protection shutdown failed: ${error.message}`));
@@ -980,6 +982,7 @@ class SiteManager extends DeliverySiteManager {
   async stopAll() {
     clearInterval(this.statsTimer); clearInterval(this.firewallTimer); clearInterval(this.healthTimer);
     this.healthStopping = true; this.runtimeLogStopping = true;
+    this.flushOutputLogs();
     for (const timer of this.restartTimers.values()) clearTimeout(timer); this.restartTimers.clear();
     await this.healthCheckPromise?.catch(() => {});
     if (this.statsFlushImmediate) { clearImmediate(this.statsFlushImmediate); this.statsFlushImmediate = null; }

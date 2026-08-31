@@ -409,13 +409,13 @@ class DeliverySiteManager extends CoreSiteManager {
     this.installActive = Math.max(0, this.installActive - 1);
   }
 
-  async runInstall(siteOrId) {
+  async runInstall(siteOrId, { fresh = false } = {}) {
     const site = typeof siteOrId === 'object' ? siteOrId : this.getSite(siteOrId);
     if (!site) throw new Error('Site not found.');
     if (this.installing.has(site.id)) return this.installing.get(site.id);
     const operation = (async () => {
       await this.acquireInstallSlot();
-      try { return await this._runInstall(site); }
+      try { return await this._runInstall(site, { fresh }); }
       finally { this.releaseInstallSlot(); }
     })();
     this.installing.set(site.id, operation);
@@ -423,14 +423,20 @@ class DeliverySiteManager extends CoreSiteManager {
     finally { this.installing.delete(site.id); }
   }
 
-  async _runInstall(site) {
+  async _runInstall(site, { fresh = false } = {}) {
     const root = siteRoot(site);
     const packageFile = path.join(root, 'package.json');
     if (!(await realFileInsideAsync(root, packageFile))) throw new Error('A regular package.json file was not found in this website.');
-    this.log(site.id, 'info', 'Running npm install --omit=dev…');
+    const lockfile = path.join(root, 'package-lock.json');
+    if (fresh) {
+      this.log(site.id, 'info', 'Removing existing Node.js dependencies before a fresh install…');
+      await fs.promises.rm(path.join(root, 'node_modules'), { recursive: true, force: true, maxRetries: 2 });
+    }
+    const npmCommand = fresh && await realFileInsideAsync(root, lockfile) ? 'ci' : 'install';
+    this.log(site.id, 'info', `Running npm ${npmCommand} --omit=dev…`);
     const command = process.platform === 'win32' ? 'npm.cmd' : 'npm';
     await new Promise((resolve, reject) => {
-      const child = spawn(command, ['install', '--omit=dev', '--no-audit', '--no-fund'], processOptions({
+      const child = spawn(command, [npmCommand, '--omit=dev', '--no-audit', '--no-fund'], processOptions({
         cwd: root,
         env: buildEnvironment({ NODE_ENV: 'production' }),
         stdio: ['ignore', 'pipe', 'pipe']
@@ -454,7 +460,7 @@ class DeliverySiteManager extends CoreSiteManager {
       const logChunk = (level, chunk) => {
         const text = chunk.toString();
         output = appendTail(output, text);
-        for (const line of text.split(/\r?\n/).filter(Boolean)) this.log(site.id, level, `npm: ${line.slice(0, 1000)}`);
+        for (const line of text.split(/\r?\n/).filter(Boolean)) this.logOutput(site.id, level, `npm: ${line.slice(0, 1000)}`);
       };
       child.stdout.on('data', (chunk) => logChunk('info', chunk));
       child.stderr.on('data', (chunk) => logChunk('error', chunk));
@@ -469,8 +475,9 @@ class DeliverySiteManager extends CoreSiteManager {
         forceTimer.unref?.();
       }, NPM_INSTALL_TIMEOUT_MS);
       timer.unref?.();
-      child.once('error', (error) => finish(reject, new Error(`npm could not start: ${error.message}`)));
+      child.once('error', (error) => { this.flushOutputLogs(site.id); finish(reject, new Error(`npm could not start: ${error.message}`)); });
       child.once('close', (code) => {
+        this.flushOutputLogs(site.id);
         if (timedOut) finish(reject, new Error('npm install timed out.'));
         else if (code === 0) finish(resolve);
         else finish(reject, new Error(`npm install exited with code ${code}. ${output.trim().slice(-1200)}`));
@@ -482,7 +489,7 @@ class DeliverySiteManager extends CoreSiteManager {
       fingerprint: await this.dependencyFingerprint(root),
       installedAt: new Date().toISOString()
     }, null, 2), { mode: 0o600 });
-    this.log(site.id, 'info', 'npm install completed.');
+    this.log(site.id, 'info', `npm ${npmCommand} completed${fresh ? ' with a fresh dependency tree' : ''}.`);
   }
 
 }

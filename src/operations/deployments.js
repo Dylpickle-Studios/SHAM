@@ -22,7 +22,7 @@ class DeploymentOperations extends ConfigurationOperations {
     try {
       await getRuntimeClient().sandboxRun({
         image, envFile, workspaceSource: stage, command, timeoutMs: GIT_TIMEOUT_MS,
-        onLine: (level, line) => this.manager.log(site.id, level, `${label}: ${line}`, { deploymentId })
+        onLine: (level, line) => this.manager.logOutput(site.id, level, `${label}: ${line}`, { deploymentId })
       });
     } finally { await fs.promises.rm(envFile, { force: true }).catch(() => {}); }
   }
@@ -76,7 +76,7 @@ class DeploymentOperations extends ConfigurationOperations {
         await fs.promises.writeFile(keyPath, privateKey, { mode: 0o600 });
         environment.GIT_SSH_COMMAND = `ssh -i ${JSON.stringify(keyPath)} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`;
       }
-      const cloneOptions = this.trackedProcessOptions({ timeoutMs: GIT_TIMEOUT_MS, env: environment, environmentMode: 'build', onLine: (level, line) => this.manager.log(site.id, level, `git: ${line}`, { deploymentId }) });
+      const cloneOptions = this.trackedProcessOptions({ timeoutMs: GIT_TIMEOUT_MS, env: environment, environmentMode: 'build', onLine: (level, line) => this.manager.logOutput(site.id, level, `git: ${line}`, { deploymentId }) });
       try {
         await runProcess(GIT_BIN, ['clone', '--depth', '1', '--branch', ref, '--single-branch', '--', repository, stage], cloneOptions);
       } catch (error) {
@@ -108,14 +108,14 @@ class DeploymentOperations extends ConfigurationOperations {
       const isolatedBuild = spec.driver === 'container' && spec.container.mode === 'image';
       if (configuredInstall) {
         if (isolatedBuild) await this.runContainerBuildCommand(site, stage, configuredInstall, environment, 'install', deploymentId, spec.container.image);
-        else await runConfiguredCommand(configuredInstall, this.trackedProcessOptions({ cwd: stage, timeoutMs: GIT_TIMEOUT_MS, env: environment, environmentMode: 'build', onLine: (level, line) => this.manager.log(site.id, level, `install: ${line}`, { deploymentId }) }));
+        else await runConfiguredCommand(configuredInstall, this.trackedProcessOptions({ cwd: stage, timeoutMs: GIT_TIMEOUT_MS, env: environment, environmentMode: 'build', onLine: (level, line) => this.manager.logOutput(site.id, level, `install: ${line}`, { deploymentId }) }));
       } else if (installDependencies && site.runtime_type === 'node' && !(site.runtime_isolation === 'docker')) {
         const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-        await runProcess(npm, ['install', '--omit=dev', '--no-audit', '--no-fund'], this.trackedProcessOptions({ cwd: stage, timeoutMs: GIT_TIMEOUT_MS, env: environment, environmentMode: 'build', onLine: (level, line) => this.manager.log(site.id, level, `npm: ${line}`, { deploymentId }) }));
+        await runProcess(npm, ['install', '--omit=dev', '--no-audit', '--no-fund'], this.trackedProcessOptions({ cwd: stage, timeoutMs: GIT_TIMEOUT_MS, env: environment, environmentMode: 'build', onLine: (level, line) => this.manager.logOutput(site.id, level, `npm: ${line}`, { deploymentId }) }));
       }
       if (configuredBuild) {
         if (isolatedBuild) await this.runContainerBuildCommand(site, stage, configuredBuild, environment, 'build', deploymentId, spec.container.image);
-        else await runConfiguredCommand(configuredBuild, this.trackedProcessOptions({ cwd: stage, timeoutMs: GIT_TIMEOUT_MS, env: environment, environmentMode: 'build', onLine: (level, line) => this.manager.log(site.id, level, `build: ${line}`, { deploymentId }) }));
+        else await runConfiguredCommand(configuredBuild, this.trackedProcessOptions({ cwd: stage, timeoutMs: GIT_TIMEOUT_MS, env: environment, environmentMode: 'build', onLine: (level, line) => this.manager.logOutput(site.id, level, `build: ${line}`, { deploymentId }) }));
       }
       if (outputDirectory && spec.driver === 'static') {
         const output = path.join(stage, ...safeRelativePath(outputDirectory, 'Build output directory').split('/'));

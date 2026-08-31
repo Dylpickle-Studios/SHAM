@@ -246,6 +246,11 @@ Container presets include Existing image, Dockerfile, Buildpacks, and Nixpacks. 
 
 Managed application servers should use the host/port values SHAM injects rather than hard-coding a public listener.
 
+If you publish the site through SHAM's shared edge proxy, you may leave the
+site listener port blank: SHAM allocates a private internal listener and routes
+the configured hostname through the shared 80/443 edge. Specify a listener
+port only when you need a direct route as well.
+
 Example Node/Express:
 
 ```js

@@ -62,6 +62,8 @@ class EdgeProxy {
     this.manager = manager;
     this.httpServer = null;
     this.operations = null;
+    this.cloudflareTunnels = null;
+    this.sharedCloudflareTunnel = null;
     this.httpsServer = null;
     this.siteCache = new Map();
     this.tlsContextCache = new Map();
@@ -81,6 +83,10 @@ class EdgeProxy {
   }
 
   setOperations(operations) { this.operations = operations; }
+  setCloudflareTunnels(cloudflareTunnels, sharedCloudflareTunnel = null) {
+    this.cloudflareTunnels = cloudflareTunnels || null;
+    this.sharedCloudflareTunnel = sharedCloudflareTunnel || null;
+  }
   invalidateSiteCache() { this.siteCache.clear(); this.tlsDomainCache.clear(); this.ambiguousDomains.clear(); }
 
   enabled() { return EDGE_HTTP_PORT > 0 || EDGE_HTTPS_PORT > 0; }
@@ -113,8 +119,20 @@ class EdgeProxy {
     const host = ['0.0.0.0', '::', 'localhost'].includes(site.bind_host) ? '127.0.0.1' : site.bind_host;
     return `${status.protocol || (site.ssl_enabled ? 'https' : 'http')}://${host.includes(':') ? `[${host}]` : host}:${site.port}`;
   }
+  acceptsLocalTunnelIdentity(site) {
+    try {
+      const siteTunnel = this.cloudflareTunnels && site?.id ? this.cloudflareTunnels.status(site.id) : null;
+      const sharedTunnel = this.sharedCloudflareTunnel?.status?.();
+      return Boolean(
+        (siteTunnel?.enabled && siteTunnel.tokenConfigured)
+        || (sharedTunnel?.enabled && sharedTunnel.tokenConfigured)
+      );
+    } catch {
+      return false;
+    }
+  }
   prepareRequest(site, req) {
-    const identity = requestIdentity(site, req);
+    const identity = requestIdentity(site, req, { trustLocalCloudflareTunnel: this.acceptsLocalTunnelIdentity(site) });
     delete req.headers['x-sham-edge-token'];
     delete req.headers['x-sham-client-ip'];
     delete req.headers['x-sham-client-country'];

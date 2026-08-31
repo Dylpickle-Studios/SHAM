@@ -48,6 +48,7 @@ class CoreSiteManager {
     this.runtimeLogFlushImmediate = null;
     this.runtimeLogStopping = false;
     this.pendingRuntimeLogs = [];
+    this.outputLogBatches = new Map();
     this.runtimeLogWrites = 0;
     this.firewallCache = new Map();
     this.firewallHits = new Map();
@@ -256,6 +257,43 @@ class CoreSiteManager {
       if (this.pendingRuntimeLogs.length > 10_000) this.pendingRuntimeLogs.splice(0, this.pendingRuntimeLogs.length - 10_000);
       console.error(`[orchestrator] Could not persist runtime logs: ${error.message}`);
       return false;
+    }
+  }
+
+  logOutput(siteId, level, message, context = null) {
+    const text = String(message || '').slice(0, 1200);
+    if (!text) return;
+    const deploymentId = Number(context?.deploymentId) || Number(this.activeDeploymentIds.get(Number(siteId))) || 0;
+    const source = text.match(/^([a-z0-9_-]+):/i)?.[1]?.toLowerCase() || 'runtime';
+    const key = `${Number(siteId) || 0}:${level === 'error' ? 'error' : 'info'}:${deploymentId}:${source}`;
+    let batch = this.outputLogBatches.get(key);
+    if (!batch) {
+      batch = { siteId, level, context, lines: [], characters: 0, timer: null };
+      this.outputLogBatches.set(key, batch);
+    }
+    const wouldOverflow = batch.lines.length >= 24 || batch.characters + text.length + 1 > 3600;
+    if (wouldOverflow) this.flushOutputLog(key);
+    batch = this.outputLogBatches.get(key) || { siteId, level, context, lines: [], characters: 0, timer: null };
+    if (!this.outputLogBatches.has(key)) this.outputLogBatches.set(key, batch);
+    batch.lines.push(text);
+    batch.characters += text.length + 1;
+    if (!batch.timer) {
+      batch.timer = setTimeout(() => this.flushOutputLog(key), 250);
+      batch.timer.unref?.();
+    }
+  }
+
+  flushOutputLog(key) {
+    const batch = this.outputLogBatches.get(key);
+    if (!batch) return;
+    this.outputLogBatches.delete(key);
+    clearTimeout(batch.timer);
+    if (batch.lines.length) this.log(batch.siteId, batch.level, batch.lines.join('\n'), batch.context);
+  }
+
+  flushOutputLogs(siteId = null) {
+    for (const [key, batch] of this.outputLogBatches) {
+      if (siteId === null || Number(batch.siteId) === Number(siteId)) this.flushOutputLog(key);
     }
   }
 

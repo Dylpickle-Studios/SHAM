@@ -1,5 +1,18 @@
 # Cloudflare Tunnels
 
+## Visitor identity through the shared edge
+
+For an enabled SHAM-managed site or instance/shared Tunnel whose origin is the
+shared edge proxy, SHAM automatically preserves Cloudflare's visitor identity.
+`cloudflared` connects over loopback, and SHAM accepts `CF-Connecting-IP` and
+`CF-IPCountry` only on that enabled local tunnel path before forwarding the
+request to the site. Visitor IP storage still follows **Settings → Security →
+Visitor privacy** (`none`, `mask`, or `hash`).
+
+Do not add broad private networks to `SHAM_TRUSTED_EDGE_PROXIES`. That setting
+is only for a separately operated proxy/connector with a fixed, trusted peer;
+SHAM-managed tunnel origins do not need it.
+
 SHAM can supervise a dedicated remotely managed `cloudflared` connector per site, or one instance shared connector for several site routes. The connector makes an outbound connection to Cloudflare, so a site can be published without exposing its origin listener directly to the Internet.
 
 This feature is separate from SHAM's Cloudflare DNS/WAF integration:

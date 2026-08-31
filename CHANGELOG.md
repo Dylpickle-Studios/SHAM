@@ -4,6 +4,18 @@ All notable public changes to SHAM are documented here. The project follows Sema
 
 ## [Unreleased]
 
+### Changed
+
+- Runtime stdout/stderr is batched into bounded multi-line workspace events
+  instead of creating one log event per output line.
+- Shared-edge site creation can allocate the private listener port
+  automatically when the port field is left blank.
+- Host-based Node/npm sites can perform a snapshotted fresh production
+  dependency install from the dashboard.
+- Enabled SHAM-managed Cloudflare Tunnel routes now preserve visitor IP and
+  country headers through the shared edge proxy without requiring a broad
+  trusted-proxy setting.
+
 ## [1.2.0] — 2026-08-31
 
 ### Added

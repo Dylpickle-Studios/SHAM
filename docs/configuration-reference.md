@@ -14,9 +14,16 @@ Use `.env.example` as the machine-readable template for the current release. Thi
 | `SHAM_SELF_SIGNED_HTTPS` | `false` | Direct/local installs: generate a self-signed certificate and serve the dashboard over HTTPS. Trust the generated `dashboard-tls/cert.pem` on client devices. |
 | `SHAM_OPENSSL_BIN` | `openssl` | OpenSSL executable used to generate the local self-signed dashboard certificate. |
 | `SHAM_TRUST_PROXY` | `loopback` | Express trust-proxy setting. Keep this narrow unless you fully control the proxy path. |
-| `SHAM_TRUSTED_EDGE_PROXIES` | empty | Explicit reverse-proxy peers allowed to supply Cloudflare visitor identity headers. |
+| `SHAM_TRUSTED_EDGE_PROXIES` | empty | Explicit reverse-proxy peers allowed to supply Cloudflare visitor identity headers. Enabled SHAM-managed Cloudflare Tunnel origins on loopback are trusted automatically. |
 
 Do not broadly trust private address ranges merely because SHAM sits behind a reverse proxy. Origin access and trusted proxy peers should be designed together.
+
+When an enabled SHAM-managed site or instance/shared Cloudflare Tunnel targets
+the shared edge proxy, SHAM accepts `CF-Connecting-IP` and `CF-IPCountry` from
+that loopback connector automatically. This preserves visitor IP/country
+analytics and local firewall decisions without trusting those headers from
+external peers. A remote/reverse-proxy connector still needs its exact address in
+`SHAM_TRUSTED_EDGE_PROXIES`; do not use a broad private subnet.
 
 When SHAM is published behind a reverse proxy, set `SHAM_PUBLIC_ORIGIN` to the exact origin users open in their browser. This prevents proxy `Host` rewriting from producing mismatched WebAuthn RP IDs or OIDC callback URLs.
 

@@ -54,6 +54,12 @@ The root README is intentionally an overview. The detailed manual is split by ta
 
 The dashboard includes a shorter categorized copy of the most common documentation. Press **Ctrl/Cmd+K** to search documentation, settings, websites, performance destinations, logs, and common actions.
 
+For a site published through the shared edge proxy, the site listener port is
+optional: SHAM will allocate a private internal port while the domain remains
+available through the shared 80/443 edge. Host-based Node/npm sites also offer
+**Fresh npm install**, which snapshots the site, removes `node_modules`, and
+installs production dependencies from the lockfile before restarting it.
+
 ## Quick start
 
 > [!TIP]
@@ -326,7 +332,7 @@ See **[Plugin development](docs/plugin-development.md)**.
 
 A few deployment-sensitive details are intentionally kept visible in the root README because they affect secure installation and CI expectations:
 
-- Use `SHAM_TRUSTED_EDGE_PROXIES` to enumerate reverse-proxy peers allowed to supply Cloudflare visitor identity headers. Keep this narrower than an entire private network unless direct origin access is blocked.
+- Enabled SHAM-managed site or instance/shared Cloudflare Tunnel origins on loopback automatically preserve `CF-Connecting-IP`/country through the shared edge proxy. Use `SHAM_TRUSTED_EDGE_PROXIES` only for separately operated reverse-proxy peers, and keep it narrower than an entire private network.
 - Managed Docker networking uses `SHAM_DOCKER_INTERNAL_NETWORK` for no-egress workloads and `SHAM_DOCKER_EGRESS_NETWORK` for workloads allowed outbound access.
 - Docker/Compose/build execution goes through the Runtime Agent, authenticated with `SHAM_RUNTIME_AGENT_TOKEN_PATH` over `SHAM_RUNTIME_AGENT_SOCKET`; only the agent process ever needs `/var/run/docker.sock`.
 - Deployment-webhook authentication recognizes provider signatures/tokens plus SHAM's own HMAC header. GitHub-style HMAC uses `X-Hub-Signature-256`; SHAM-native HMAC uses `X-SHAM-Signature`. See [Git and CI/CD](docs/git-and-cicd.md) for provider-specific behavior.

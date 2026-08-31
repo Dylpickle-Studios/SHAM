@@ -137,3 +137,17 @@ test('a failed UI deployment keeps the previously healthy release serving', asyn
   await expect(page.locator('body')).toContainText(/failed|readiness|deployment/i, { timeout: 30_000 });
   await sham.waitForEdge(siteDomain, 'SHAM_TEST_VERSION_1');
 });
+
+test('the site workspace and file browser remain usable on a phone viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page);
+  await openWorkspace(page);
+  await expect(page.getByRole('button', { name: 'Fresh npm install' })).toBeVisible();
+  await expect(page.locator('.workspace-tabs')).toBeVisible();
+  await page.getByRole('tab', { name: 'Files' }).click();
+  await page.getByRole('button', { name: 'Open file manager' }).click();
+  await expect(page.locator('#files-dialog')).toBeVisible();
+  await expect(page.locator('#file-list .file-item').first()).toBeVisible();
+  const viewport = await page.evaluate(() => ({ width: globalThis.innerWidth, documentWidth: globalThis.document.documentElement.scrollWidth }));
+  expect(viewport.documentWidth).toBeLessThanOrEqual(viewport.width);
+});

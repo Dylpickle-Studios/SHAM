@@ -10,6 +10,9 @@ const { parseSimpleYaml, resolveRuntimeSpec, executionPolicyHash } = require('..
 const { validateSiteInput } = require('../src/validation');
 const { safeArchiveEntry } = require('../src/backup-restore');
 const { lineLogger, shellCommand, waitForReadiness } = require('../src/runtime-engine');
+const { CoreSiteManager } = require('../src/sites/core');
+const { requestIdentity } = require('../src/sites/shared');
+const { EdgeProxy } = require('../src/edge-proxy');
 const { verifyWithJwk } = require('../src/oidc');
 const { siteRoot, safeReleaseDirectory } = require('../src/site-paths');
 const { RELEASES_DIR, SITES_DIR } = require('../src/config');
@@ -73,6 +76,53 @@ test('runtime line logger preserves lines split across stream chunks', async () 
   stream.end(' line\n');
   await new Promise((resolve) => stream.once('end', resolve));
   assert.deepEqual(lines, ['first half second', 'next line']);
+});
+
+test('runtime output is grouped into bounded workspace log events without mixing sources', () => {
+  const manager = Object.create(CoreSiteManager.prototype);
+  manager.outputLogBatches = new Map();
+  manager.activeDeploymentIds = new Map([[7, 31]]);
+  const recorded = [];
+  manager.log = (...entry) => recorded.push(entry);
+
+  manager.logOutput(7, 'info', 'node: first output line');
+  manager.logOutput(7, 'info', 'node: second output line');
+  manager.logOutput(7, 'error', 'node: an error line');
+  manager.flushOutputLogs(7);
+
+  assert.equal(recorded.length, 2);
+  assert.deepEqual(recorded[0], [7, 'info', 'node: first output line\nnode: second output line', null]);
+  assert.deepEqual(recorded[1], [7, 'error', 'node: an error line', null]);
+});
+
+test('an enabled local Cloudflare Tunnel preserves visitor identity without trusting remote spoofed headers', () => {
+  const localTunnelRequest = {
+    headers: { 'cf-connecting-ip': '203.0.113.21', 'cf-ipcountry': 'NL', 'user-agent': 'Mozilla/5.0' },
+    socket: { remoteAddress: '127.0.0.1' }
+  };
+  const localIdentity = requestIdentity({ cloudflare_enabled: false }, localTunnelRequest, { trustLocalCloudflareTunnel: true });
+  assert.equal(localIdentity.ip, '203.0.113.21');
+  assert.equal(localIdentity.country, 'NL');
+
+  const remoteRequest = {
+    headers: { 'cf-connecting-ip': '203.0.113.21', 'cf-ipcountry': 'NL', 'user-agent': 'Mozilla/5.0' },
+    socket: { remoteAddress: '198.51.100.9' }
+  };
+  const remoteIdentity = requestIdentity({ cloudflare_enabled: false }, remoteRequest, { trustLocalCloudflareTunnel: true });
+  assert.equal(remoteIdentity.ip, '198.51.100.9');
+  assert.equal(remoteIdentity.country, 'ZZ');
+});
+
+test('shared-edge identity forwarding is enabled only for configured SHAM tunnel connectors', () => {
+  const db = { prepare: () => ({ all: () => [], get: () => null }) };
+  const edge = new EdgeProxy({ db, manager: {} });
+  edge.setCloudflareTunnels(
+    { status: () => ({ enabled: false, tokenConfigured: false }) },
+    { status: () => ({ enabled: true, tokenConfigured: true }) }
+  );
+  assert.equal(edge.acceptsLocalTunnelIdentity({ id: 12 }), true);
+  edge.setCloudflareTunnels({ status: () => ({ enabled: false, tokenConfigured: false }) });
+  assert.equal(edge.acceptsLocalTunnelIdentity({ id: 12 }), false);
 });
 
 test('structured runtime argv preserves argument boundaries and startup spawn errors fail fast', async () => {

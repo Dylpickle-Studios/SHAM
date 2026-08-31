@@ -32,6 +32,16 @@ Current presets:
 
 These are starting presets, not framework installers. Your release/build stage must provide the executable/dependencies the command needs.
 
+### Refreshing Node dependencies
+
+For a host-based Node or npm process, **Fresh npm install** is available from
+the site action menu and workspace header. SHAM snapshots the site, stops the
+runtime, removes its release's `node_modules`, then runs `npm ci --omit=dev`
+when a `package-lock.json` is present (otherwise `npm install --omit=dev`). It
+restarts the runtime afterward. Use this for a deliberately clean production
+dependency tree; normal Git releases continue to install dependencies during
+the deployment stage when configured.
+
 ### Environment and internal binding
 
 SHAM allocates an internal application port and supplies:
@@ -42,6 +52,11 @@ SHAM allocates an internal application port and supplies:
 - Site environment values allowed for the runtime scope.
 
 Server applications should bind the injected host/port. Do not casually bind generated host-process applications to `0.0.0.0`, because that can make the internal backend directly reachable outside SHAM's public listener boundary.
+
+When the shared edge proxy is enabled, the primary listener port can be left
+blank while creating a site. SHAM assigns a private, unused internal port and
+the edge proxy remains the public 80/443 route. Keep an explicit port when a
+direct listener is required.
 
 ### Public and private listeners in one process
 

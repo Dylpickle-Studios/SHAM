@@ -55,7 +55,7 @@ function siteActionButtons(site) {
     <button data-action="content" type="button" role="menuitem">Replace all files</button>
     <button data-action="tools" type="button" role="menuitem">Snapshots & security scan</button>
     ${state.user.role === 'admin' ? '<button data-action="operations" type="button" role="menuitem">Deployment operations</button>' : ''}
-    ${((site.runtime_type === 'node' && site.runtime_isolation !== 'docker') || (site.runtime_type === 'process' && ['node', 'npm'].includes(site.runtime_preset))) ? '<button data-action="install" type="button" role="menuitem">Run npm install</button>' : ''}
+    ${((site.runtime_type === 'node' && site.runtime_isolation !== 'docker') || (site.runtime_type === 'process' && ['node', 'npm'].includes(site.runtime_preset))) ? '<button data-action="install-fresh" type="button" role="menuitem">Fresh npm install</button>' : ''}
     ${state.user.role === 'admin' && site.domain ? '<button data-action="cloudflare" type="button" role="menuitem">Sync Cloudflare DNS</button><button data-action="cloudflare-firewall" type="button" role="menuitem">Sync Cloudflare firewall</button><button data-action="certificate" type="button" role="menuitem">Issue / renew SSL</button><button data-action="certificate-wildcard" type="button" role="menuitem">Issue wildcard SSL</button>' : ''}
     <button class="danger-text" data-action="delete" type="button" role="menuitem">Delete site</button>`;
 }
@@ -207,6 +207,7 @@ function updateRuntimeFields() {
   $('#site-compose-service-row').hidden = !compose;
   $('#site-compose-file').required = compose;
   $('#site-compose-service').required = compose;
+  $('#site-port').required = !$('#site-edge').checked;
   $('#site-container-runtime-note').hidden = !(container || compose);
   // Keep this visible for Node/process Docker isolation as well: an existing
   // private-listener configuration must remain editable/clearable before the
@@ -220,6 +221,7 @@ function updateRuntimeFields() {
 }
 
 $('#site-runtime').addEventListener('change', updateRuntimeFields);
+$('#site-edge').addEventListener('change', updateRuntimeFields);
 $('#site-container-mode').addEventListener('change', updateRuntimeFields);
 $('#site-start-command').addEventListener('input', updateRuntimeFields);
 $('#site-runtime-preset').addEventListener('change', updateRuntimeFields);

@@ -68,7 +68,7 @@ Available API-token scopes in this release are `read`, `logs:read`, `deploy`, `s
 | POST | `/api/sites/:id/start` | Auth | Idempotently start site. |
 | POST | `/api/sites/:id/stop` | Auth | Idempotently stop site. |
 | POST | `/api/sites/:id/restart` | Auth | Restart managed runtime. |
-| POST | `/api/sites/:id/npm-install` | Auth | Run managed legacy Node dependency installation. |
+| POST | `/api/sites/:id/npm-install` | Auth | Install production dependencies for a host-based Node/npm site. Send `{ "fresh": true }` to remove `node_modules` first and use `npm ci` when `package-lock.json` is present. The running site is stopped, snapshotted, then restarted when possible. |
 | GET | `/api/statistics` | Auth | Dashboard traffic/visitor/attention summaries. |
 | GET | `/api/runtime-events` | Auth | Runtime event stream/history used by Observability. |
 

@@ -115,6 +115,7 @@ const cloudflareTunnels = new SiteCloudflareTunnelRegistry({
   sharedManager: legacyCloudflareTunnel,
   log: (siteId, level, message) => manager.log(siteId, level, message)
 });
+edgeProxy.setCloudflareTunnels(cloudflareTunnels, legacyCloudflareTunnel);
 const cloudflareReconciler = new CloudflareReconciler({ db, manager, getSetting });
 manager.setOperations(operationsManager);
 edgeProxy.setOperations(operationsManager);
