@@ -471,7 +471,6 @@ class SiteManager extends DeliverySiteManager {
       this.errors.set(site.id, `Proxy: ${error.message}`);
       if (typeof responseOrSocket?.writeHead === 'function') {
         if (responseOrSocket.headersSent) return responseOrSocket.destroy?.(error);
-        // The edge/proxy contract remains: if (responseOrSocket.headersSent) return responseOrSocket.destroy?.(error);
         const page = this.errorPage(runtime.site, 502, 'Upstream service is unavailable.');
         responseOrSocket.writeHead(502, { 'Content-Type': page.type });
         responseOrSocket.end(page.body);
