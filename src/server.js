@@ -55,6 +55,7 @@ const {
 const { bool, validateSiteInput, safeRelativePath } = require('./validation');
 const { auditObfuscationCompatibility } = require('./obfuscation-audit');
 const { installUploadAsync, stopUploadWorkers, MAX_FILES } = require('./upload-utils');
+const { readManifest, manifestOverrides } = require('./runtime-spec');
 const SITE_FORM_FIELD_LIMIT = 192;
 const { CappedDiskStorage, cleanupUploadedFiles } = require('./upload-storage');
 const {
@@ -640,11 +641,11 @@ function cloudflarePortWarning(site) {
 const routeContext = {
   app, requireAuth, requireAdmin, db, manager, cloudflareTunnels, net, recordAudit, performanceMonitor,
   uploadSizeGuard, multipart, receiveWebsite, receiveSingleFile, nextAvailableSitePort, validateSiteInput, uniqueSlug,
-  checkPort, checkAdditionalListenerPorts, installUploadAsync, SITES_DIR, fs, path, operationsManager, bool, writeSiteConfig, requiredSiteFile,
+  checkPort, checkAdditionalListenerPorts, installUploadAsync, SITES_DIR, UPLOAD_TMP_DIR, fs, path, operationsManager, bool, writeSiteConfig, requiredSiteFile,
   safeObfuscationWarning, uploadParts, auditObfuscationCompatibility, safeRelativePath, listSiteFilesAsync,
   readTextFileAsync, writeTextFileAsync, replaceSingleFileFromPathAsync, deleteSingleFileAsync, stageSingleFileDeletionAsync,
   snapshotManager, dependencyScanner, edgeProxy, getSetting, siteRows, getSiteOr404,
-  hasCertificate, realFileInside, cloudflarePortWarning, snapshotLabel
+  hasCertificate, realFileInside, cloudflarePortWarning, snapshotLabel, readManifest, manifestOverrides
 };
 
 const adminRouteContext = {

@@ -148,9 +148,11 @@ function installUpload({ archive, files, relativePaths, destination, entryFile, 
     if (archive) writeZip(uploadSource(archive, 'Uploaded ZIP archive'), staging, maxBytes);
     else writeFiles(files, relativePaths, staging, maxBytes);
 
-    const entry = ensureInside(staging, safeRelativePath(entryFile, 'Entry file'));
-    if (!fs.existsSync(entry) || !fs.statSync(entry).isFile()) {
-      throw new Error(`Entry file “${entryFile}” was not found in the upload.`);
+    if (entryFile) {
+      const entry = ensureInside(staging, safeRelativePath(entryFile, 'Entry file'));
+      if (!fs.existsSync(entry) || !fs.statSync(entry).isFile()) {
+        throw new Error(`Entry file “${entryFile}” was not found in the upload.`);
+      }
     }
     commitStaging(staging, destination);
   } catch (error) {

@@ -7,6 +7,7 @@
 // without a similar comment and a plan to remove it.
 'use strict';
 
+const crypto = require('node:crypto');
 const { siteRoot, legacySiteRoot } = require('../site-paths');
 const { RELEASES_DIR, UPLOAD_LIMIT_BYTES } = require('../config');
 
@@ -14,12 +15,12 @@ function registerSiteRoutes(ctx) {
   const {
     app, requireAuth, requireAdmin, db, manager, cloudflareTunnels, net, recordAudit, performanceMonitor,
     uploadSizeGuard, multipart, receiveWebsite, receiveSingleFile, nextAvailableSitePort, validateSiteInput,
-    uniqueSlug, checkPort, checkAdditionalListenerPorts, installUploadAsync, SITES_DIR, fs, path, operationsManager, bool, writeSiteConfig,
+    uniqueSlug, checkPort, checkAdditionalListenerPorts, installUploadAsync, SITES_DIR, UPLOAD_TMP_DIR, fs, path, operationsManager, bool, writeSiteConfig,
     requiredSiteFile, safeObfuscationWarning, uploadParts, auditObfuscationCompatibility, safeRelativePath,
     listSiteFilesAsync, readTextFileAsync, writeTextFileAsync, replaceSingleFileFromPathAsync, deleteSingleFileAsync,
     stageSingleFileDeletionAsync, snapshotManager, dependencyScanner,
     edgeProxy, getSetting, siteRows, getSiteOr404,
-    hasCertificate, realFileInside, cloudflarePortWarning, snapshotLabel
+    hasCertificate, realFileInside, cloudflarePortWarning, snapshotLabel, readManifest, manifestOverrides
   } = ctx;
 
   const findActiveEdgeDomain = db.prepare(`
@@ -39,6 +40,24 @@ function registerSiteRoutes(ctx) {
   };
 
 app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().map((site) => ({ ...site, cloudflareTunnel: cloudflareTunnels.summary(site.id) })) }));
+
+  // Inspect uploaded source before site creation so the wizard can show the
+  // same sham.yaml/sham.yml policy that will later be applied at runtime.
+  // The archive is extracted with the normal upload safety checks, then the
+  // temporary preview tree is removed regardless of the outcome.
+  app.post('/api/sites/manifest-preview', requireAuth, uploadSizeGuard, multipart(receiveWebsite), async (req, res) => {
+    const previewRoot = path.join(UPLOAD_TMP_DIR, `manifest-preview-${crypto.randomUUID()}`);
+    try {
+      await installUploadAsync({ ...uploadParts(req), destination: previewRoot, entryFile: '', maxBytes: UPLOAD_LIMIT_BYTES });
+      const record = readManifest(previewRoot);
+      if (!record) return res.json({ found: false });
+      res.json({ found: true, filename: record.filename, config: manifestOverrides(record) });
+    } catch (error) {
+      res.status(400).json({ error: `Could not read the uploaded SHAM manifest: ${error.message}` });
+    } finally {
+      await fs.promises.rm(previewRoot, { recursive: true, force: true }).catch(() => {});
+    }
+  });
 
 
   app.patch('/api/sites/:id/pin', requireAuth, (req, res) => {

@@ -183,6 +183,9 @@ Before making the instance public:
 6. Mount the Docker socket into `sham-runtime-agent` only if Docker-managed application features are required.
 7. Treat anyone who can deploy trusted runtime/build/plugin code as having meaningful authority over the host.
 
+For a dashboard that is reachable only through a VPN, see the
+[LinuxServer WireGuard topology example](operations-and-security.md#vpn-only-sham-dashboard-example).
+
 See [Operations and security](operations-and-security.md) and [Configuration reference](configuration-reference.md) before exposing a production instance.
 
 ## 5. Understand persistent data

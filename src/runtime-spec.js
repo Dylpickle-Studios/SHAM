@@ -284,4 +284,4 @@ function executionPolicyHash(spec) {
   return crypto.createHash('sha256').update(JSON.stringify(executionPolicy(spec))).digest('hex');
 }
 
-module.exports = { RUNTIME_PRESETS, parseSimpleYaml, readManifest, resolveRuntimeSpec, executionPolicy, executionPolicyHash, safeRelative };
+module.exports = { RUNTIME_PRESETS, parseSimpleYaml, readManifest, manifestOverrides, resolveRuntimeSpec, executionPolicy, executionPolicyHash, safeRelative };

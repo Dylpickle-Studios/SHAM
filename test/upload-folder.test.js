@@ -10,6 +10,7 @@ process.env.SHAM_JWT_SECRET = 'upload-folder-test-secret-at-least-32-characters'
 test.after(() => fs.rmSync(temporaryData, { recursive: true, force: true }));
 
 const { installUpload, installUploadAsync } = require('../src/upload-utils');
+const { readManifest, manifestOverrides } = require('../src/runtime-spec');
 
 function file(name, content) {
   const buffer = Buffer.from(content);
@@ -30,6 +31,29 @@ test('folder upload strips one common enclosing directory', () => {
     });
     assert.equal(fs.readFileSync(path.join(destination, 'index.html'), 'utf8'), '<h1>Hello</h1>');
     assert.equal(fs.readFileSync(path.join(destination, 'assets/app.js'), 'utf8'), 'console.log(1)');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('manifest preview staging accepts an upload without requiring an entry file', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sham-upload-preview-'));
+  const destination = path.join(root, 'preview');
+  try {
+    installUpload({
+      archive: null,
+      files: [file('sham.yml', 'runtime:\n  driver: process\n  command: node server.js\nbuild:\n  install: npm ci\n'), file('server.js', 'process.exit(0)')],
+      relativePaths: ['project/sham.yml', 'project/server.js'],
+      destination,
+      entryFile: '',
+      maxBytes: 1024 * 1024
+    });
+    const record = readManifest(destination);
+    assert.equal(record.filename, 'sham.yml');
+    const config = manifestOverrides(record);
+    assert.equal(config.driver, 'process');
+    assert.equal(config.command, 'node server.js');
+    assert.equal(config.installCommand, 'npm ci');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

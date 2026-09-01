@@ -60,6 +60,11 @@ available through the shared 80/443 edge. Host-based Node/npm sites also offer
 **Fresh npm install**, which snapshots the site, removes `node_modules`, and
 installs production dependencies from the lockfile before restarting it.
 
+When you select a ZIP or folder for a new upload, SHAM detects a root
+`sham.yaml`, `sham.yml`, or `sham.json` and prefills supported runtime/build
+settings for review. It does not execute the manifest during preview; the same
+validated manifest is applied from the deployed source at runtime.
+
 ## Quick start
 
 > [!TIP]
@@ -174,6 +179,8 @@ A Node.js or managed-process site can expose a small number of additional **priv
 ```
 
 SHAM injects `ADMIN_PORT` with an internal port for the application and proxies `10.8.0.1:4101` to it; the normal `PORT` listener remains the site's public listener. Extra listeners may bind only to loopback, RFC1918/CGNAT IPv4, or ULA IPv6 addresses. They are deliberately not routed through the shared edge or Cloudflare Tunnel, and SHAM rejects using one as a Tunnel origin. Restrict the listener with your VPN and host firewall—SHAM does not provide VPN authentication—and use HTTPS or an encrypted VPN where the private network is not already trusted. SHAM does not auto-detect application ports: declare each private listener explicitly so it can validate readiness and keep exposure predictable. Docker and Compose sites do not support this feature.
+
+See [Runtimes and Docker](docs/runtimes-and-docker.md#public-and-private-listeners-in-one-process) for a complete two-server example. To keep the SHAM dashboard itself private, use the [VPN-only dashboard guide](docs/operations-and-security.md#vpn-only-sham-dashboard-example), including a LinuxServer WireGuard topology.
 
 ### Example: repository manifest
 

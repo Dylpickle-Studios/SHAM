@@ -236,6 +236,7 @@ $('#site-readiness-type').addEventListener('change', updateProbeFields);
 
 function clearUpload(kind) {
   state.uploads[kind] = null;
+  if (kind === 'site') uploadManifestRequest += 1;
   const label = kind === 'site' ? $('#upload-label') : $('#content-upload-label');
   label.textContent = kind === 'site' ? 'Drop a ZIP or project folder' : 'Drop a ZIP or project folder';
   const inputs = kind === 'site' ? ['#zip-input', '#folder-input'] : ['#content-zip-input', '#content-folder-input'];
@@ -247,6 +248,67 @@ function setUpload(kind, selection) {
   const label = kind === 'site' ? $('#upload-label') : $('#content-upload-label');
   if (selection.archive) label.textContent = `${selection.archive.name} · ${formatBytes(selection.archive.size)}`;
   else label.textContent = `${selection.files.length} files · ${formatBytes(selection.files.reduce((sum, file) => sum + Number(file.size || 0), 0))}`;
+  if (kind === 'site') previewUploadManifest(selection);
+}
+
+let uploadManifestRequest = 0;
+
+function manifestCommandForForm(value) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value) && value.every((part) => typeof part === 'string')) return JSON.stringify(value);
+  return '';
+}
+
+function applyUploadManifestPrefill(config) {
+  const driver = String(config.driver || '').toLowerCase();
+  const runtimeByDriver = { static: 'static', process: 'process', container: 'container', compose: 'compose', proxy: 'proxy' };
+  if (runtimeByDriver[driver]) $('#site-runtime').value = runtimeByDriver[driver];
+  if (typeof config.preset === 'string' && ['node', 'npm', 'bun', 'deno', 'fastapi', 'django', 'go', 'java', 'custom'].includes(config.preset)) $('#site-runtime-preset').value = config.preset;
+  if (typeof config.command === 'string' || Array.isArray(config.command)) $('#site-start-command').value = manifestCommandForForm(config.command);
+  if (typeof config.workingDirectory === 'string') $('#site-working-directory').value = config.workingDirectory;
+  if (typeof config.portEnv === 'string') $('#site-runtime-port-env').value = config.portEnv;
+  if (typeof config.installCommand === 'string') $('#site-install-command').value = config.installCommand;
+  if (typeof config.buildCommand === 'string') $('#site-build-command').value = config.buildCommand;
+  if (typeof config.buildOutputDir === 'string') $('#site-build-output').value = config.buildOutputDir;
+  if (typeof config.readinessType === 'string') $('#site-readiness-type').value = config.readinessType;
+  if (typeof config.readinessPath === 'string') $('#site-readiness-path').value = config.readinessPath;
+  if (typeof config.readinessCommand === 'string' || Array.isArray(config.readinessCommand)) $('#site-readiness-command').value = manifestCommandForForm(config.readinessCommand);
+  if (config.readinessStatusMin !== undefined) $('#site-readiness-status-min').value = String(config.readinessStatusMin);
+  if (config.readinessStatusMax !== undefined) $('#site-readiness-status-max').value = String(config.readinessStatusMax);
+  if (config.startupTimeoutSeconds !== undefined) $('#site-startup-timeout').value = String(config.startupTimeoutSeconds);
+  if (config.shutdownGraceSeconds !== undefined) $('#site-shutdown-grace').value = String(config.shutdownGraceSeconds);
+  if (config.drainSeconds !== undefined) $('#site-blue-green-drain').value = String(config.drainSeconds);
+  if (typeof config.containerMode === 'string') $('#site-container-mode').value = config.containerMode;
+  if (typeof config.image === 'string') {
+    $('#site-container-image').value = config.image;
+    $('#site-runtime-container-image').value = config.image;
+  }
+  if (config.containerPort !== undefined) $('#site-container-port').value = String(config.containerPort);
+  if (typeof config.dockerfilePath === 'string') $('#site-dockerfile-path').value = config.dockerfilePath;
+  if (typeof config.buildpackBuilder === 'string') $('#site-buildpack-builder').value = config.buildpackBuilder;
+  if (typeof config.composeFile === 'string') $('#site-compose-file').value = config.composeFile;
+  if (typeof config.composeService === 'string') $('#site-compose-service').value = config.composeService;
+  $('#site-manifest-enabled').checked = true;
+  updateRuntimeFields();
+  updateProbeFields();
+}
+
+async function previewUploadManifest(selection) {
+  const requestId = ++uploadManifestRequest;
+  const body = new FormData();
+  if (selection.archive) body.append('archive', selection.archive, selection.archive.name);
+  else {
+    selection.files.forEach((file) => body.append('files', file, file.name));
+    body.append('relativePaths', JSON.stringify(selection.paths));
+  }
+  try {
+    const result = await api('/api/sites/manifest-preview', { method: 'POST', body });
+    if (requestId !== uploadManifestRequest || state.uploads.site !== selection || !result.found) return;
+    applyUploadManifestPrefill(result.config || {});
+    toast(`${result.filename} loaded. Review the prefilled runtime and build settings before deploying.`, 'success');
+  } catch (error) {
+    if (requestId === uploadManifestRequest && state.uploads.site === selection) toast(error.message, 'warning');
+  }
 }
 
 async function validatedArchive(file) {

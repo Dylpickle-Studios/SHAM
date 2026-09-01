@@ -60,6 +60,7 @@ Available API-token scopes in this release are `read`, `logs:read`, `deploy`, `s
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | GET | `/api/sites` | Auth | List sites with runtime/tunnel summaries. |
+| POST | `/api/sites/manifest-preview` | Auth | Safely inspect an uploaded ZIP/folder and return supported `sham.yaml`/`sham.yml`/`sham.json` runtime/build fields for wizard prefilling. The preview tree is discarded. |
 | POST | `/api/sites` | Auth | Create/upload a site using multipart form data. |
 | PUT | `/api/sites/:id` | Auth | Update site configuration. |
 | DELETE | `/api/sites/:id` | Auth | Delete site. |

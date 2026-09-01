@@ -72,6 +72,25 @@ Node and managed-process sites running with **process** isolation may declare up
 
 Private listener bind addresses are restricted to loopback, RFC1918/CGNAT IPv4, or ULA IPv6. They are not eligible for shared-edge routing or Cloudflare Tunnel origins, so the primary `PORT` listener remains the only public route. SHAM intentionally does not auto-detect process ports: explicit declarations prevent accidental exposure and make readiness deterministic. These listeners are HTTP proxies; use a VPN, firewall, and appropriate transport encryption for the private network. Docker and Compose runtimes are not supported.
 
+For example, one Node process can run a public application and a separate
+VPN-only administration application:
+
+```js
+const http = require('node:http');
+
+http.createServer((_req, res) => res.end('public app'))
+  .listen(Number(process.env.PORT), process.env.HOST || '127.0.0.1');
+
+http.createServer((_req, res) => res.end('private admin'))
+  .listen(Number(process.env.ADMIN_PORT), '127.0.0.1');
+```
+
+The public server is reached through the shared edge/Cloudflare route. SHAM
+proxies the private `admin` listener at the configured VPN-interface address
+and port (for example `10.8.0.1:4101`) to `ADMIN_PORT`; do not bind the Node
+process itself directly to the VPN address. Test both listeners after each
+deployment and enforce VPN/firewall access outside SHAM.
+
 ### Custom process commands
 
 Use Custom when a server can run as a normal foreground process. Repository manifests can provide either a command string or a structured argv array. Structured arrays are safer for arguments containing whitespace because SHAM does not need to reconstruct shell quoting.
@@ -220,6 +239,13 @@ Managed runtime identity is persisted/labelled sufficiently for SHAM to reconcil
 ## `sham.yaml`, `sham.yml`, and `sham.json`
 
 Repository manifests can override build/runtime execution policy.
+
+When selecting a ZIP or folder in the **New site** upload wizard, SHAM looks
+for `sham.yaml`, `sham.yml`, then `sham.json` after applying the same safe
+archive/folder rules used for deployment. Supported runtime, build, container,
+Compose, readiness, and shutdown fields are prefilled for review before you
+deploy. This preview does not execute commands or retain the temporary source;
+the manifest is still parsed and applied again from the deployed source.
 
 Example:
 

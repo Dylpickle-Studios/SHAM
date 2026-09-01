@@ -15,6 +15,10 @@ All notable public changes to SHAM are documented here. The project follows Sema
 - Enabled SHAM-managed Cloudflare Tunnel routes now preserve visitor IP and
   country headers through the shared edge proxy without requiring a broad
   trusted-proxy setting.
+- Uploading a ZIP or folder now detects a root `sham.yaml`/`sham.yml` manifest
+  and prefills supported runtime/build settings before deployment.
+- Documented public-plus-VPN-only process listeners and a LinuxServer
+  WireGuard deployment pattern for keeping the SHAM dashboard private.
 
 ## [1.2.0] — 2026-08-31
 

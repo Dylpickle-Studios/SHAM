@@ -128,6 +128,87 @@ Client secrets are encrypted at rest. Keep issuer endpoints HTTPS and carefully 
 
 Local authentication remains available unless you intentionally place an external access policy around SHAM.
 
+## VPN-only SHAM dashboard example
+
+The dashboard/API is an administrative control plane. If public access is not
+needed, do not publish its port; expose only the VPN UDP port and reach SHAM
+through a private Docker network. Public site traffic can still use the shared
+edge or Cloudflare Tunnel independently.
+
+The following is a topology example using
+[LinuxServer.io WireGuard](https://docs.linuxserver.io/images/docker-wireguard/).
+It is not a replacement for reviewing LinuxServer's current image
+documentation, WireGuard peer configuration, and your host firewall policy.
+
+```text
+administrator device ── WireGuard UDP/51820 ── wireguard container
+                                              │ private Docker network
+                                              └── sham:8080
+```
+
+Start from a copy of SHAM's Compose file and **remove** its host mapping for
+`8080:8080`. Keep `80`/`443` only if you need direct shared-edge traffic. Give
+the SHAM and WireGuard containers a dedicated network with stable addresses:
+
+```yaml
+services:
+  sham:
+    # Do not publish 8080 on the host.
+    ports:
+      - "80:80"       # omit if all public traffic uses Cloudflare Tunnel
+      - "443:443"     # omit if all public traffic uses Cloudflare Tunnel
+    networks:
+      sham_vpn:
+        ipv4_address: 172.30.0.10
+
+  wireguard:
+    image: lscr.io/linuxserver/wireguard:latest
+    container_name: sham-wireguard
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Amsterdam
+      - SERVERURL=vpn.example.example
+      - SERVERPORT=51820
+      - PEERS=admin
+      - INTERNAL_SUBNET=10.13.13.0
+      # Include SHAM's private Docker subnet in generated peer routes.
+      - ALLOWEDIPS=172.30.0.0/24
+    volumes:
+      - ./wireguard-config:/config
+      - /lib/modules:/lib/modules:ro
+    ports:
+      - "51820:51820/udp"
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    networks:
+      sham_vpn:
+        ipv4_address: 172.30.0.2
+
+networks:
+  sham_vpn:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+```
+
+Import the generated `admin` peer configuration, then browse to
+`http://172.30.0.10:8080` only after the VPN connects. Configure TLS with an
+internal CA or a VPN-reachable reverse proxy if plaintext HTTP on the tunnel is
+not acceptable. Do not expose the dashboard through `0.0.0.0:8080`, a broad
+Docker port mapping, or a Cloudflare Tunnel merely because the login page has
+authentication.
+
+Before relying on this topology, verify all of the following from a machine
+outside the VPN: UDP/51820 is the only intended administrative ingress,
+`http://SERVER_PUBLIC_IP:8080` fails, and the dashboard is reachable through
+the WireGuard peer. Docker-network forwarding behavior can vary with host
+firewall rules; if peers cannot reach `172.30.0.10`, add a narrow forwarding
+rule for `wg0` to `172.30.0.0/24` instead of opening port 8080 publicly.
+
 ## Local account security
 
 SHAM supports:
