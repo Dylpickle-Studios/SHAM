@@ -57,7 +57,7 @@
     "@types/http-proxy": "^1.17.17",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.2.0",
-    "@types/node": "^26.3.0",
+    "@types/node": "^26.4.0",
     "eslint": "^10.9.1",
     "globals": "^17.11.0",
     "typescript": "^7.0.2"
