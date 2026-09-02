@@ -25,14 +25,14 @@
   },
   "dependencies": {
     "adm-zip": "0.6.0",
-    "better-sqlite3": "13.0.1",
+    "better-sqlite3": "13.0.3",
     "clean-css": "5.3.3",
-    "express": "5.2.0",
+    "express": "5.2.1",
     "html-minifier-terser": "7.2.0",
     "http-proxy": "1.18.1",
     "jsonwebtoken": "9.0.3",
-    "multer": "2.2.0",
-    "terser": "5.44.0"
+    "multer": "2.3.0",
+    "terser": "5.51.2"
   },
   "license": "AGPL-3.0-or-later",
   "private": true,
