@@ -2,8 +2,10 @@ ARG VERSION=dev
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
 ARG CLOUDFLARED_VERSION=2026.7.3
+ARG NEWT_VERSION=1.14.0
 
 FROM cloudflare/cloudflared:${CLOUDFLARED_VERSION} AS cloudflared
+FROM fosrl/newt:${NEWT_VERSION} AS newt
 
 FROM node:22-bookworm-slim AS dependencies
 WORKDIR /app
@@ -38,6 +40,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY --from=cloudflared /usr/local/bin/cloudflared /usr/local/bin/cloudflared
+COPY --from=newt /usr/local/bin/newt /usr/local/bin/newt
 COPY package.json ./
 COPY src ./src
 COPY runtime-agent ./runtime-agent

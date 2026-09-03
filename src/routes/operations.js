@@ -9,7 +9,7 @@ function registerOperationsRoutes(ctx) {
   const {
     app, requireAuth, requireAdmin, webhookLimiter, serializeSiteMutation, db, crypto, DEPLOY_WEBHOOK_DUMMY_SECRET,
     operationsManager, manager, recordAudit, getSiteOr404, bool, validateSiteInput, uniqueSlug, writeSiteConfig,
-    getSecretSetting, setSecretSetting, getSetting, setSetting, cloudflareTunnels, legacyCloudflareTunnel, cloudflareTunnelControlPlane, updateManager, verifyPassword, stepUpLimiter,
+    getSecretSetting, setSecretSetting, getSetting, setSetting, cloudflareTunnels, legacyCloudflareTunnel, cloudflareTunnelControlPlane, pangolinTunnel, updateManager, verifyPassword, stepUpLimiter,
     multipart, updateUpload
   } = ctx;
 
@@ -325,9 +325,10 @@ function authenticateDeployWebhook(req, res, next) {
     const operations = operationsManager.operationsPayload();
     res.json({
       ...operations,
-      capabilities: { ...operations.capabilities, cloudflared: cloudflareTunnels.available() || legacyCloudflareTunnel.status().available },
+      capabilities: { ...operations.capabilities, cloudflared: cloudflareTunnels.available() || legacyCloudflareTunnel.status().available, newt: pangolinTunnel.status().available },
       siteCloudflareTunnels: cloudflareTunnels.listStatus(),
       cloudflareTunnel: legacyCloudflareTunnel.status(),
+      pangolinTunnel: pangolinTunnel.status(),
       gitProviders: providerStatuses(db),
       settings: {
         prometheusEnabled: getSetting('prometheus_enabled', '0') === '1',
@@ -364,6 +365,32 @@ function authenticateDeployWebhook(req, res, next) {
       const result = await legacyCloudflareTunnel.restart();
       recordAudit(req.user.id, 'cloudflare-tunnel.restart');
       res.json({ cloudflareTunnel: result });
+    } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+
+  app.put('/api/admin/pangolin-tunnel', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+      const allowed = new Set(['enabled', 'endpoint', 'newtId', 'secret', 'clearSecret']);
+      const unknown = Object.keys(body).filter((key) => !allowed.has(key));
+      if (unknown.length) throw new Error(`Unknown Pangolin setting${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}.`);
+      const has = (key) => Object.prototype.hasOwnProperty.call(body, key);
+      const configuration = { clearSecret: bool(body.clearSecret, false) };
+      if (has('enabled')) configuration.enabled = bool(body.enabled);
+      if (has('endpoint')) configuration.endpoint = String(body.endpoint || '');
+      if (has('newtId')) configuration.newtId = String(body.newtId || '');
+      if (has('secret')) configuration.secret = String(body.secret || '');
+      const result = await pangolinTunnel.configure(configuration);
+      recordAudit(req.user.id, 'pangolin-tunnel.configure', { enabled: result.enabled, secretUpdated: Boolean(has('secret') && String(body.secret || '').trim()), secretCleared: bool(body.clearSecret, false) });
+      res.json({ pangolinTunnel: result });
+    } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+
+  app.post('/api/admin/pangolin-tunnel/restart', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const result = await pangolinTunnel.restart();
+      recordAudit(req.user.id, 'pangolin-tunnel.restart');
+      res.json({ pangolinTunnel: result });
     } catch (error) { res.status(400).json({ error: error.message }); }
   });
 

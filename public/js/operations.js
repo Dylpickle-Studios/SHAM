@@ -120,6 +120,7 @@ function tunnelStatePresentation(tunnel = {}) {
     disabled: ['Disabled', ''],
     stopped: ['Stopped', ''],
     'needs-token': ['Token required', 'warning'],
+    'needs-credentials': ['Credentials required', 'warning'],
     unavailable: ['Unavailable', 'error'],
     starting: ['Connecting', 'warning'],
     connected: ['Connected', 'success'],
@@ -232,6 +233,7 @@ function renderOperationsInstance(payload) {
   const backup = payload.backupSettings || {};
   const tunnels = payload.siteCloudflareTunnels || [];
   const legacy = payload.cloudflareTunnel || {};
+  const pangolin = payload.pangolinTunnel || {};
   const connectors = [...tunnels];
   if (legacy.enabled || legacy.tokenConfigured) connectors.push({ ...legacy, name: 'Instance connector', domain: 'Legacy configuration', legacy: true });
   const activeTunnels = connectors.filter((tunnel) => tunnel.enabled);
@@ -252,6 +254,24 @@ function renderOperationsInstance(payload) {
   $('#clear-shared-cloudflare-tunnel-token').checked = false;
   $('#shared-cloudflare-tunnel-token').disabled = false;
   $('#shared-cloudflare-tunnel-token-status').textContent = legacy.tokenConfigured ? 'A shared connector token is saved.' : 'No shared connector token is saved.';
+  const [pangolinLabel, pangolinBadge] = tunnelStatePresentation(pangolin);
+  $('#pangolin-tunnel-status').textContent = pangolinLabel;
+  $('#pangolin-tunnel-status').className = `badge ${pangolinBadge}`.trim();
+  $('#pangolin-tunnel-enabled').checked = Boolean(pangolin.enabled);
+  $('#pangolin-endpoint').value = pangolin.endpoint || '';
+  $('#pangolin-newt-id').value = pangolin.newtId || '';
+  $('#pangolin-newt-secret').value = '';
+  $('#clear-pangolin-newt-secret').checked = false;
+  $('#pangolin-newt-secret').disabled = false;
+  $('#pangolin-newt-secret-status').textContent = pangolin.secretConfigured
+    ? pangolin.secretReadable === false ? 'A secret is saved but cannot be decrypted.' : 'A Newt secret is saved.'
+    : 'No Newt secret is saved.';
+  $('#pangolin-tunnel-detail').textContent = !pangolin.enabled ? 'The connector is disabled.'
+    : !pangolin.available ? 'The Newt executable is unavailable.'
+      : pangolin.connected ? `Connected${pangolin.connectedAt ? ` since ${formatDate(pangolin.connectedAt)}` : ''}.`
+        : pangolin.running ? 'Newt is running and waiting for Pangolin.' : (pangolin.lastError || 'Newt is not running.');
+  $('#pangolin-tunnel-detail').className = `notice span-2 ${['error', 'unavailable', 'backoff', 'needs-credentials'].includes(pangolin.state) ? 'warning' : ''}`.trim();
+  $('#restart-pangolin-tunnel').disabled = !pangolin.enabled || !pangolin.secretConfigured || !pangolin.available;
   const gitProviders = new Map((payload.gitProviders || []).map((item) => [item.provider, item]));
   for (const row of $$('[data-git-provider-row]')) {
     const provider = row.dataset.gitProviderRow;
@@ -334,6 +354,7 @@ function renderOperationsInstance(payload) {
     ['Buildpacks', capabilities.buildpacks, capabilities.buildpacks ? '' : 'The pack executable was not found; Dockerfile/image runtimes still work.'],
     ['Nixpacks', capabilities.nixpacks, capabilities.nixpacks ? '' : 'The nixpacks executable was not found; Dockerfile/image runtimes still work.'],
     ['Cloudflare Tunnel', capabilities.cloudflared, capabilities.cloudflared ? '' : 'The cloudflared executable was not found.'],
+    ['Pangolin / Newt', capabilities.newt, capabilities.newt ? '' : 'The newt executable was not found.'],
     ['Anubis', capabilities.anubis, capabilities.anubis ? '' : (capabilities.dockerReason || 'Anubis requires Docker isolation support.')],
     ['External backup', backup.configured, backup.configured ? '' : 'Configure and test an external backup destination.'],
     ['Public status', settings.publicStatusEnabled, settings.publicStatusEnabled ? '' : 'Public status is disabled.']
@@ -693,6 +714,41 @@ $('#restart-shared-cloudflare-tunnel').addEventListener('click', async (event) =
     state.operations = { ...(state.operations || {}), instance: { ...(state.operations?.instance || {}), cloudflareTunnel: result.cloudflareTunnel } };
     renderOperationsInstance(state.operations.instance);
     toast('Shared tunnel connector restarted.');
+  } catch (error) { toast(error.message, 'error'); }
+  finally { setBusy(event.currentTarget, false); }
+});
+
+$('#clear-pangolin-newt-secret').addEventListener('change', (event) => {
+  $('#pangolin-newt-secret').disabled = event.currentTarget.checked;
+  if (event.currentTarget.checked) $('#pangolin-newt-secret').value = '';
+});
+
+$('#pangolin-tunnel-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = event.submitter;
+  setBusy(button, true, 'Saving…');
+  try {
+    const result = await api('/api/admin/pangolin-tunnel', { method: 'PUT', body: {
+      enabled: $('#pangolin-tunnel-enabled').checked,
+      endpoint: $('#pangolin-endpoint').value,
+      newtId: $('#pangolin-newt-id').value,
+      secret: $('#pangolin-newt-secret').value || undefined,
+      clearSecret: $('#clear-pangolin-newt-secret').checked
+    } });
+    state.operations = { ...(state.operations || {}), instance: { ...(state.operations?.instance || {}), pangolinTunnel: result.pangolinTunnel } };
+    renderOperationsInstance(state.operations.instance);
+    toast('Pangolin connector saved.');
+  } catch (error) { toast(error.message, 'error'); }
+  finally { setBusy(button, false); }
+});
+
+$('#restart-pangolin-tunnel').addEventListener('click', async (event) => {
+  setBusy(event.currentTarget, true, 'Restarting…');
+  try {
+    const result = await api('/api/admin/pangolin-tunnel/restart', { method: 'POST' });
+    state.operations = { ...(state.operations || {}), instance: { ...(state.operations?.instance || {}), pangolinTunnel: result.pangolinTunnel } };
+    renderOperationsInstance(state.operations.instance);
+    toast('Newt restarted.');
   } catch (error) { toast(error.message, 'error'); }
   finally { setBusy(event.currentTarget, false); }
 });

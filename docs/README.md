@@ -15,6 +15,7 @@ This manual documents the current SHAM feature set. The root [README](../README.
 - [Dashboard and UI](dashboard-and-ui.md) — navigation, quick-view drilldowns, site workspaces, Performance, command palette, Settings organization, themes, modals, tooltips, and notifications.
 - [Operations and security](operations-and-security.md) — environment variables, database profiles, jobs, backups/restore, monitoring, Cloudflare, Certbot, OIDC, local authentication, API tokens, and trust boundaries.
 - [Cloudflare Tunnels](cloudflare-tunnels.md) — per-site `cloudflared` connectors, Zero Trust public-hostname routing, Docker/service targets, security, and troubleshooting.
+- [Pangolin](pangolin.md) — instance-wide `newt` connector, Pangolin resource routing, security boundaries, and troubleshooting.
 - [Troubleshooting](troubleshooting.md) — common upload, runtime, Docker, Compose, Git, restore, UI, CLI, and release failures.
 
 ### Automate or integrate SHAM
@@ -48,6 +49,7 @@ This manual documents the current SHAM feature set. The root [README](../README.
 | Environment variables/secrets | [Operations and security](operations-and-security.md) |
 | Backup restore | [Operations and security](operations-and-security.md) |
 | Cloudflare Tunnel | [Cloudflare Tunnels](cloudflare-tunnels.md) |
+| Pangolin | [Pangolin](pangolin.md) |
 | Cloudflare DNS/WAF, Certbot, OIDC | [Operations and security](operations-and-security.md) |
 | Theme customization | [Dashboard and UI](dashboard-and-ui.md) |
 | Plugin playground | [Plugin development](plugin-development.md) |

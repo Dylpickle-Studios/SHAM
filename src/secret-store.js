@@ -126,7 +126,7 @@ function setSecretSetting(db, key, value) {
 }
 
 function migrateKnownSecrets(db) {
-  const settingKeys = ['cloudflare_api_token', 'cloudflare_tunnel_token', 'cloudflare_tunnel_api_token', 'backup_config', 'alert_delivery_config', 'prometheus_token', 'otel_headers', 'oidc_client_secret'];
+  const settingKeys = ['cloudflare_api_token', 'cloudflare_tunnel_token', 'cloudflare_tunnel_api_token', 'pangolin_newt_secret', 'backup_config', 'alert_delivery_config', 'prometheus_token', 'otel_headers', 'oidc_client_secret'];
   const updateSetting = db.prepare('UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?');
   const updatePlugin = db.prepare('UPDATE plugin_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE plugin_id = ? AND key = ?');
   const updateDatabaseProfile = db.prepare('UPDATE database_profiles SET connection_value = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');

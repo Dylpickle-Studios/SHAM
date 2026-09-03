@@ -91,6 +91,7 @@ const { OperationsManager } = require('./operations-manager');
 const { UpdateManager } = require('./update-manager');
 const { CloudflareTunnelManager, DatabaseTunnelSettingsStore, SiteCloudflareTunnelRegistry } = require('./cloudflare-tunnel');
 const { CloudflareTunnelControlPlane } = require('./cloudflare-tunnel-control-plane');
+const { PangolinTunnelManager, DatabasePangolinSettingsStore } = require('./pangolin-tunnel');
 const { registerSiteRoutes } = require('./routes/sites');
 const { registerAdminRoutes } = require('./routes/admin');
 const { registerOperationsRoutes } = require('./routes/operations');
@@ -115,6 +116,10 @@ const cloudflareTunnels = new SiteCloudflareTunnelRegistry({
   db,
   sharedManager: legacyCloudflareTunnel,
   log: (siteId, level, message) => manager.log(siteId, level, message)
+});
+const pangolinTunnel = new PangolinTunnelManager({
+  settingsStore: new DatabasePangolinSettingsStore(db),
+  log: (level, message) => manager.log(null, level, message)
 });
 edgeProxy.setCloudflareTunnels(cloudflareTunnels, legacyCloudflareTunnel);
 const cloudflareReconciler = new CloudflareReconciler({ db, manager, getSetting });
@@ -660,7 +665,7 @@ const adminRouteContext = {
 const operationsRouteContext = {
   app, requireAuth, requireAdmin, webhookLimiter, serializeSiteMutation, db, crypto, DEPLOY_WEBHOOK_DUMMY_SECRET,
   operationsManager, manager, recordAudit, getSiteOr404, bool, validateSiteInput, uniqueSlug, writeSiteConfig,
-  getSecretSetting, setSecretSetting, getSetting, setSetting, cloudflareTunnels, legacyCloudflareTunnel, cloudflareTunnelControlPlane, updateManager, verifyPassword, stepUpLimiter,
+  getSecretSetting, setSecretSetting, getSetting, setSetting, cloudflareTunnels, legacyCloudflareTunnel, cloudflareTunnelControlPlane, pangolinTunnel, updateManager, verifyPassword, stepUpLimiter,
   multipart, updateUpload, cleanupUploadedFiles
 };
 
@@ -1128,10 +1133,10 @@ dashboardServer.listen(DASHBOARD_PORT, DASHBOARD_HOST, async () => {
     console.error(`Could not restore enabled sites during startup: ${error.message}`);
   }
   try {
-    await Promise.all([cloudflareTunnels.startEnabled(), legacyCloudflareTunnel.start()]);
+    await Promise.all([cloudflareTunnels.startEnabled(), legacyCloudflareTunnel.start(), pangolinTunnel.start()]);
     await cloudflareReconciler.tick();
   } catch (error) {
-    console.error(`Could not start configured Cloudflare Tunnels: ${error.message}`);
+    console.error(`Could not start configured outbound tunnel connectors: ${error.message}`);
   } finally {
     dashboardStartupSettled = true;
     resolveDashboardReady({ host: DASHBOARD_HOST, port: DASHBOARD_PORT });
@@ -1168,7 +1173,7 @@ async function shutdown(signal) {
 
   await cloudflareReconciler.stop();
   await stopIntegrationProcesses();
-  await Promise.allSettled([performanceMonitor.stop(), dependencyScanner.shutdown(), snapshotManager.shutdown(), operationsManager.shutdown(), updateManager.shutdown(), cloudflareTunnels.shutdown(), legacyCloudflareTunnel.shutdown(), edgeProxy.stop()]);
+  await Promise.allSettled([performanceMonitor.stop(), dependencyScanner.shutdown(), snapshotManager.shutdown(), operationsManager.shutdown(), updateManager.shutdown(), cloudflareTunnels.shutdown(), legacyCloudflareTunnel.shutdown(), pangolinTunnel.shutdown(), edgeProxy.stop()]);
   await stopUploadWorkers();
   await pluginManager.shutdown();
   await manager.stopAll();

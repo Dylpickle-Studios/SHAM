@@ -200,6 +200,7 @@ module.exports = {
   EDGE_HTTPS_PORT: integerEnv('SHAM_EDGE_HTTPS_PORT', 0, 0, 65535),
   CERTBOT_BIN: process.env.SHAM_CERTBOT_BIN || 'certbot',
   CLOUDFLARED_BIN: process.env.SHAM_CLOUDFLARED_BIN || 'cloudflared',
+  NEWT_BIN: process.env.SHAM_NEWT_BIN || 'newt',
   DOCKER_BIN: process.env.SHAM_DOCKER_BIN || 'docker',
   PACK_BIN: process.env.SHAM_PACK_BIN || 'pack',
   NIXPACKS_BIN: process.env.SHAM_NIXPACKS_BIN || 'nixpacks',

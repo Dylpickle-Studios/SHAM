@@ -218,6 +218,8 @@ Plugins can register additional routes/actions according to their manifest and p
 | POST | `/api/admin/certificates/renew` | Admin | Renew certificates. |
 | PUT | `/api/admin/cloudflare-tunnel` | Admin | Legacy/global tunnel configuration. |
 | POST | `/api/admin/cloudflare-tunnel/restart` | Admin | Restart legacy/global connector. |
+| PUT | `/api/admin/pangolin-tunnel` | Admin | Configure the instance Pangolin/Newt connector. |
+| POST | `/api/admin/pangolin-tunnel/restart` | Admin | Restart the supervised Newt connector. |
 | GET | `/api/admin/sites/:id/cloudflare-tunnel` | Admin | Read per-site tunnel state. |
 | PUT | `/api/admin/sites/:id/cloudflare-tunnel` | Admin | Save per-site tunnel configuration. |
 | POST | `/api/admin/sites/:id/cloudflare-tunnel/restart` | Admin | Restart per-site tunnel. |

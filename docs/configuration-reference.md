@@ -115,6 +115,7 @@ Prefer external/container secret injection for production credentials.
 |---|---|---|
 | `SHAM_CERTBOT_BIN` | `certbot` | Certificate issuance/renewal. |
 | `SHAM_CLOUDFLARED_BIN` | `cloudflared` | Cloudflare Tunnels. |
+| `SHAM_NEWT_BIN` | `newt` | Pangolin Newt connector executable. |
 | `SHAM_DOCKER_BIN` | `docker` | Runtime Agent only: containers, Dockerfile builds, Compose, Docker isolation, Anubis. |
 | `SHAM_PACK_BIN` | `pack` | Cloud Native Buildpacks. |
 | `SHAM_NIXPACKS_BIN` | `nixpacks` | Nixpacks source-to-image builds. |
