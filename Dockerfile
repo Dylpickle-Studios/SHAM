@@ -7,7 +7,7 @@ ARG NEWT_VERSION=1.14.0
 FROM cloudflare/cloudflared:${CLOUDFLARED_VERSION} AS cloudflared
 FROM fosrl/newt:${NEWT_VERSION} AS newt
 
-FROM node:22-bookworm-slim AS dependencies
+FROM node:26-bookworm-slim AS dependencies
 WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 make g++ \
@@ -16,7 +16,7 @@ COPY package*.json ./
 RUN if [ -f package-lock.json ]; then npm ci --omit=dev --no-fund; else npm install --omit=dev --no-fund; fi \
     && npm audit --omit=dev --audit-level=high
 
-FROM node:22-bookworm-slim
+FROM node:26-bookworm-slim
 ARG VERSION
 ARG VCS_REF
 ARG BUILD_DATE
