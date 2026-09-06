@@ -13,6 +13,7 @@ const MAX_STREAM_LINE_BYTES = 16 * 1024;
 // import this list so neither side can silently grow an extra route.
 const OPERATIONS = Object.freeze({
   STATUS: { method: 'GET', path: '/v1/status' },
+  RESTORE_QUIESCE: { method: 'POST', path: '/v1/restore/quiesce' },
   IMAGES_BUILD: { method: 'POST', path: '/v1/images/build', stream: true },
   IMAGES_REMOVE: { method: 'POST', path: '/v1/images/remove' },
   CONTAINERS_RUN: { method: 'POST', path: '/v1/containers/run' },

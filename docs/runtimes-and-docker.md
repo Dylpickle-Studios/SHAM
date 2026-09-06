@@ -183,13 +183,15 @@ SHAM rejects common host/container escape or unmanaged-publication features, inc
 - Added Linux capabilities.
 - Devices.
 - Docker socket mounts.
-- Host bind mounts; use named volumes instead.
+- Host bind mounts, including bind mounts disguised as named-volume driver options; use project-scoped local named volumes with no driver options instead.
 - Host-gateway mappings.
 - Disabled/unsafe security-profile settings covered by policy validation.
 - External/unmanaged networks, volumes, configs, or secrets.
 - Published host ports on supporting services.
 
 The selected application service may receive the SHAM-managed loopback publication needed for routing when SHAM runs directly on the host. When SHAM itself is containerized, runtime networking uses the configured shared Docker network so the control plane does not incorrectly route to its own container-local `127.0.0.1`.
+
+Workload environment values are passed through temporary private env files and do not configure the agent's CLI process. `DOCKER_*` and `COMPOSE_*` variables are reserved in Compose interpolation. SHAM supplies an explicit interpolation env file, so a repository's implicit `.env` file is not loaded; configure interpolation values in SHAM or explicit service `env_file` entries. Docker env-file values cannot contain newlines or NUL bytes. Use mounted files for multiline secrets.
 
 ### No-egress Compose/runtime networks
 

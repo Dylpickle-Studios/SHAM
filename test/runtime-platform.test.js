@@ -238,15 +238,6 @@ test('scheduled jobs target the active runtime instead of stale fixed container 
   assert.match(source, /backend\.composeFiles/);
 });
 
-test('backup restore validates the full archive and database before swapping live data', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'backup-restore.js'), 'utf8');
-  assert.match(source, /inspectTarLines/);
-  assert.match(source, /database\.pragma\('quick_check'/);
-  assert.match(source, /for \(const table of \['users', 'settings', 'sites'\]\)/);
-  assert.match(source, /validateRestoreTree\(stageRoot\)/);
-  assert.match(source, /rename\(DATA_DIR, rollbackRoot\)/);
-});
-
 test('bulk runtime and tunnel shutdown work is concurrency-bounded', () => {
   const runtime = fs.readFileSync(path.join(__dirname, '..', 'src', 'sites', 'runtime.js'), 'utf8');
   const tunnels = fs.readFileSync(path.join(__dirname, '..', 'src', 'cloudflare-tunnel.js'), 'utf8');

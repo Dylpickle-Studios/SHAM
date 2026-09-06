@@ -1,5 +1,7 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --
 'use strict';
+
+// The option terminator prevents Node itself from consuming Docker's --env-file.
 
 // Minimal stand-in for the `docker` CLI used by runtime-agent tests. State
 // (which container/network names exist, and their labels) is persisted as
@@ -47,7 +49,10 @@ if (command === 'run') {
     }
   }
   const id = `cid-${name}`;
-  state.containers[name] = { Id: id, Config: { Labels: labels } };
+  const envFileIndex = args.indexOf('--env-file');
+  const workloadEnv = envFileIndex >= 0 ? fs.readFileSync(args[envFileIndex + 1], 'utf8').trimEnd().split('\n') : [];
+  const leakedEnv = workloadEnv.filter((line) => { const split = line.indexOf('='); return process.env[line.slice(0, split)] === line.slice(split + 1); });
+  state.containers[name] = { Id: id, Config: { Labels: labels, Env: workloadEnv, LeakedEnv: leakedEnv } };
   saveState(state);
   process.stdout.write(`${id}\n`);
   process.exit(0);
@@ -62,6 +67,9 @@ if (command === 'inspect') {
 }
 
 if (command === 'stop') {
+  const container = findContainer(state, args.at(-1));
+  if (container) container.State = { Running: false };
+  saveState(state);
   process.exit(0);
 }
 
@@ -118,6 +126,17 @@ if (command === 'stats') {
   process.exit(0);
 }
 
+if (command === 'volume') {
+  state.volumes ||= {};
+  const name = args.at(-1);
+  if (args[1] === 'create') {
+    state.volumes[name] ||= { Name: name, Driver: 'local', Options: {} };
+    saveState(state);
+    process.stdout.write(`${name}\n`);
+  } else if (args[1] === 'inspect') process.stdout.write(`${JSON.stringify([state.volumes[name]])}\n`);
+  process.exit(0);
+}
+
 if (command === 'image') {
   const sub = args[1];
   if (sub === 'rm') process.exit(0);
@@ -126,7 +145,10 @@ if (command === 'image') {
 }
 
 if (command === 'ps') {
-  process.stdout.write('');
+  const filter = args[args.indexOf('--filter') + 1];
+  const [label, expected] = args.includes('--filter') && filter.startsWith('label=') ? filter.slice(6).split('=') : [];
+  const containers = Object.values(state.containers).filter((container) => (args.includes('-aq') || container.State?.Running !== false) && (!label || container.Config.Labels[label] === expected));
+  process.stdout.write(containers.map((container) => container.Id).join('\n'));
   process.exit(0);
 }
 

@@ -57,17 +57,19 @@ Restore is intentionally staged:
 1. Identify the selected backup archive.
 2. Stream-inspect the complete archive structure.
 3. Enforce entry/path/count bounds.
-4. Reject absolute/traversal paths, links, and special files before extraction.
-5. Extract into an isolated staging directory.
+4. Reject absolute/traversal paths, escaping or cyclic links, entries beneath links, and special files before extraction. Safe in-tree symbolic links and hard links to regular archive files are supported.
+5. Pause the Runtime Agent, wait for active operations, stop SHAM-owned containers, and extract into an isolated staging directory inside the persistent volume.
 6. Validate the staged tree.
 7. Open/check the staged SQLite database.
 8. Run `PRAGMA quick_check`.
 9. Verify core SHAM tables.
-10. Atomically swap the live data directory.
-11. Preserve backup/update stores as required by the restore workflow.
-12. Roll back the directory swap if activation fails.
+10. Journal and rename the validated top-level entries within the volume; the mounted data directory itself stays in place.
+11. Preserve backup/update stores and the current Runtime Agent socket/token directory.
+12. Recover interrupted swaps from the journal on the next startup, then release the agent pause.
 
-The live data directory is not deleted first and then "hoped" to restore successfully.
+Backup creation uses the same archive validator before recording success. Dependency symlinks such as `node_modules/.bin` are preserved without following them into external files. Runtime Agent credentials and restore work files are excluded from new archives.
+
+Restore requires the updated control plane and Runtime Agent to be deployed together. If an active agent cannot pause, restore stops before modifying live data. Keep `.restore-work` intact if startup reports an incomplete rollback; retry startup to finish recovery. Container workloads are stopped for the restore and reconciled from the restored configuration when SHAM starts. Native deployments also require the previous SHAM process to be stopped before starting the restore bootstrap.
 
 ## Snapshots vs backups
 

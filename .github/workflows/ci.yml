@@ -105,6 +105,13 @@ jobs:
           docker logs sham-ci || true
           exit 1
 
+      - name: Restore a backup inside the mounted data volume
+        shell: bash
+        run: |
+          docker exec -i sham-ci node - stage < scripts/container-restore-smoke.js
+          docker restart sham-ci
+          docker exec -i sham-ci node - verify < scripts/container-restore-smoke.js
+
       - name: Remove smoke-test container
         if: always()
         run: docker rm -f sham-ci || true

@@ -752,6 +752,8 @@ app.get('/metrics', (req, res) => {
 const OIDC_START_PATH = '/api/auth/oidc/start';
 const OIDC_CALLBACK_PATH = '/api/auth/oidc/callback';
 
+const oidcCookieOptions = (req) => ({ httpOnly: true, sameSite: 'lax', secure: req.secure || PUBLIC_ORIGIN.startsWith('https://'), path: '/api/auth/oidc' });
+
 app.get(OIDC_START_PATH, authLimiter, async (req, res) => {
   try {
     if (getSetting('oidc_enabled', '0') !== '1') return res.status(404).type('text/plain').send('OIDC login is disabled.');
@@ -759,13 +761,18 @@ app.get(OIDC_START_PATH, authLimiter, async (req, res) => {
     const clientId = getSetting('oidc_client_id', '');
     if (!issuer || !clientId) throw new Error('OIDC login is not fully configured.');
     const redirectUri = `${requestOrigin(req)}/api/auth/oidc/callback`;
-    const location = await beginAuthorization({ issuer, clientId, redirectUri, db });
+    const browserBinding = crypto.randomBytes(32).toString('base64url');
+    const location = await beginAuthorization({ issuer, clientId, redirectUri, db, browserBinding });
+    res.cookie('sham_oidc', browserBinding, { ...oidcCookieOptions(req), maxAge: 10 * 60_000 });
     res.redirect(302, location);
   } catch (error) { res.status(400).type('text/plain').send(`OIDC login could not start: ${error.message}`); }
 });
 
 app.get(OIDC_CALLBACK_PATH, authLimiter, async (req, res) => {
-  const fail = (message) => res.redirect(302, `/?oidc_error=${encodeURIComponent(String(message || 'OIDC login failed.').slice(0, 300))}`);
+  const fail = (message) => {
+    res.clearCookie('sham_oidc', oidcCookieOptions(req));
+    return res.redirect(302, `/?oidc_error=${encodeURIComponent(String(message || 'OIDC login failed.').slice(0, 300))}`);
+  };
   try {
     if (req.query.error) return fail(req.query.error_description || req.query.error);
     if (getSetting('oidc_enabled', '0') !== '1') return fail('OIDC login is disabled.');
@@ -777,6 +784,7 @@ app.get(OIDC_CALLBACK_PATH, authLimiter, async (req, res) => {
       clientId,
       clientSecret: getSecretSetting(db, 'oidc_client_secret', ''),
       state: String(req.query.state || ''),
+      browserBinding: String(req.headers.cookie || '').split(';').map((part) => part.trim()).find((part) => part.startsWith('sham_oidc='))?.slice('sham_oidc='.length) || '',
       code: String(req.query.code || ''),
       redirectUri,
       db
@@ -808,6 +816,7 @@ app.get(OIDC_CALLBACK_PATH, authLimiter, async (req, res) => {
     }
     if (!user?.active) throw new Error('This SHAM account is disabled.');
     setAuthCookie(req, res, issueToken(user));
+    res.append('Set-Cookie', `sham_oidc=; Path=/api/auth/oidc; HttpOnly; SameSite=Lax; Max-Age=0${oidcCookieOptions(req).secure ? '; Secure' : ''}`);
     recordAudit(user.id, 'auth.oidc.login', { issuer: normalizedIssuer });
     res.redirect(302, '/');
   } catch (error) { fail(error.message); }

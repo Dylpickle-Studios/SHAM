@@ -256,3 +256,78 @@ test('runtime agent: status reports Docker reachability without leaking internal
   assert.equal(res.json.dockerVersion, '99.0.0');
   assert.equal(Object.prototype.hasOwnProperty.call(res.json, 'token'), false);
 });
+
+test('runtime agent: workload environment never configures the CLI or its executable lookup', async (t) => {
+  const agent = await startAgent();
+  t.after(() => agent.stop());
+  const hostilePath = path.join(agent.dataDir, 'caller-bin');
+  fs.mkdirSync(hostilePath);
+  fs.writeFileSync(path.join(hostilePath, 'node'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+  const env = {
+    PATH: hostilePath, HOME: '/caller-home', NODE_OPTIONS: '--caller-invalid-option',
+    DOCKER_HOST: 'unix:///caller/docker.sock', DOCKER_CONFIG: '/caller-config',
+    TOKEN: 'dummy-secret-$value', EMPTY: ''
+  };
+  const response = await rawRequest(agent.socketPath, { path: '/v1/containers/run', token: agent.token,
+    body: { name: 'sham-site-55-env', image: 'node:22', siteId: 55, env } });
+  assert.equal(response.statusCode, 200, response.text);
+  const state = JSON.parse(fs.readFileSync(path.join(agent.stateDir, 'sham-fake-docker-state.json'), 'utf8'));
+  assert.deepEqual(state.containers['sham-site-55-env'].Config.Env, Object.entries(env).map(([key, value]) => `${key}=${value}`));
+  assert.deepEqual(state.containers['sham-site-55-env'].Config.LeakedEnv, []);
+  assert.equal(fs.readdirSync(agent.stateDir).some((name) => name.startsWith('sham-agent-env-')), false);
+
+  const compose = path.join(agent.dataDir, 'compose.yaml');
+  fs.writeFileSync(compose, 'services: {}\n');
+  for (const key of ['DOCKER_CONFIG', 'COMPOSE_FILE', 'COMPOSE_PROJECT_NAME']) {
+    const rejected = await rawRequest(agent.socketPath, { path: '/v1/compose/config', token: agent.token,
+      body: { files: [compose], cwd: agent.dataDir, env: { [key]: '/caller' }, service: 'web', containerPort: 3000 } });
+    assert.equal(rejected.statusCode, 400, rejected.text);
+    assert.match(rejected.json.error.message, /reserved/);
+  }
+});
+
+test('runtime agent: restore pause blocks workloads until recovery releases the marker', async (t) => {
+  const agent = await startAgent();
+  t.after(() => agent.stop());
+  const statePath = path.join(agent.stateDir, 'sham-fake-docker-state.json');
+  fs.writeFileSync(statePath, JSON.stringify({ containers: {
+    owned: { Id: 'owned', Config: { Labels: { 'sham.managed': 'true' } } },
+    auxiliary: { Id: 'auxiliary', Config: { Labels: { 'com.docker.compose.project': 'sham-56-run' } } },
+    unrelated: { Id: 'unrelated', Config: { Labels: {} }, State: { Running: true } }
+  }, networks: {} }));
+  const work = path.join(agent.dataDir, '.restore-work');
+  fs.mkdirSync(work);
+  fs.writeFileSync(path.join(work, 'agent-paused'), 'restore');
+  const paused = await rawRequest(agent.socketPath, { path: '/v1/restore/quiesce', token: agent.token });
+  assert.equal(paused.statusCode, 200, paused.text);
+  const stopped = JSON.parse(fs.readFileSync(statePath, 'utf8')).containers;
+  assert.equal(stopped.owned.State.Running, false);
+  assert.equal(stopped.auxiliary.State.Running, false);
+  assert.equal(stopped.unrelated.State.Running, true);
+  const body = { name: 'sham-site-56-pause', image: 'node:22', siteId: 56 };
+  const blocked = await rawRequest(agent.socketPath, { path: '/v1/containers/run', token: agent.token, body });
+  assert.equal(blocked.statusCode, 503);
+  fs.unlinkSync(path.join(work, 'agent-paused'));
+  const resumed = await rawRequest(agent.socketPath, { path: '/v1/containers/run', token: agent.token, body });
+  assert.equal(resumed.statusCode, 200, resumed.text);
+});
+
+test('runtime agent: named data volumes cannot attach unmanaged or host-bound volumes', async (t) => {
+  const agent = await startAgent();
+  t.after(() => agent.stop());
+  const statePath = path.join(agent.stateDir, 'sham-fake-docker-state.json');
+  fs.writeFileSync(statePath, JSON.stringify({ containers: {}, networks: {}, volumes: {
+    'sham-site-57-data': { Name: 'sham-site-57-data', Driver: 'local', Options: { type: 'none', o: 'bind', device: '/' } }
+  } }));
+  const body = { name: 'sham-site-57-volume', image: 'node:22', siteId: 57 };
+  for (const namedVolume of ['unmanaged-volume', 'sham-site-57-data']) {
+    const response = await rawRequest(agent.socketPath, { path: '/v1/containers/run', token: agent.token, body: { ...body, namedVolume } });
+    assert.equal(response.statusCode, 400, response.text);
+  }
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  assert.deepEqual(state.containers, {});
+  state.volumes = {};
+  fs.writeFileSync(statePath, JSON.stringify(state));
+  const safe = await rawRequest(agent.socketPath, { path: '/v1/containers/run', token: agent.token, body: { ...body, namedVolume: 'sham-site-57-data' } });
+  assert.equal(safe.statusCode, 200, safe.text);
+});

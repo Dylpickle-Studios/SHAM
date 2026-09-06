@@ -346,6 +346,16 @@ function authenticateDeployWebhook(req, res, next) {
     });
   });
 
+  app.get('/api/admin/system-health', requireAuth, requireAdmin, async (_req, res) => {
+    try {
+      const health = await operationsManager.systemHealth({
+        cloudflare: legacyCloudflareTunnel.status(),
+        pangolin: pangolinTunnel.status()
+      });
+      res.json({ health });
+    } catch (error) { res.status(500).json({ error: error.message }); }
+  });
+
   app.put('/api/admin/cloudflare-tunnel', requireAuth, requireAdmin, async (req, res) => {
     try {
       const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};

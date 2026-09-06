@@ -24,20 +24,19 @@ function close(server) {
   return new Promise((resolve) => {
     if (!server?.listening) return resolve();
     let settled = false;
-    let timer;
     const finish = () => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
       resolve();
     };
-    server.close(finish);
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       for (const socket of server._shamSockets || []) socket.destroy();
       server.closeAllConnections?.();
       finish();
     }, 3000);
     timer.unref?.();
+    server.close(finish);
   });
 }
 

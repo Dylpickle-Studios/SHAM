@@ -55,5 +55,5 @@ test('Docker CLI invocations only occur inside the privileged runtime agent', ()
     assert.doesNotMatch(source, /execFile(Async)?\(DOCKER_BIN/, `${file} must not exec Docker directly`);
   }
   const agent = read('runtime-agent/docker.js');
-  assert.match(agent, /spawn\(bin, args/);
+  assert.match(agent, /spawn\(trustedTool\(bin\), args/);
 });

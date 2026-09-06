@@ -102,6 +102,8 @@ function validateComposeProjectPaths(config, root) {
   ]) {
     for (const [name, definition] of Object.entries(entries)) {
       if (definition?.external) throw new Error(`Compose ${kind} ${name} cannot be external; SHAM-managed projects must not attach unmanaged Docker resources.`);
+      if ((kind === 'volume' || kind === 'network') && definition?.name && definition.name !== `${config.name}_${name}`) throw new Error(`Compose ${kind} ${name} must use its project-scoped resource name.`);
+      if (kind === 'volume' && ((definition?.driver && definition.driver !== 'local') || Object.keys(definition?.driver_opts || {}).length)) throw new Error(`Compose volume ${name} cannot configure a volume driver or host mount options.`);
       if ((kind === 'config' || kind === 'secret') && definition?.file) assertComposePathInside(root, definition.file, `Compose ${kind} ${name}`);
     }
   }

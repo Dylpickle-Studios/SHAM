@@ -434,6 +434,10 @@ exports.activate = ({ data, settings, log }) =&gt; ({
 
         <div id="operations-instance" class="operations-tab-panel" role="tabpanel" aria-labelledby="operations-tab-instance" hidden>
           <div id="setup-checklist" class="panel setup-checklist"></div>
+          <article class="panel" id="system-health-panel">
+            <div class="panel-heading"><div><p class="eyebrow">Readiness</p><h2>System health</h2><p class="muted">Live checks for persistent storage, SQLite, runtime isolation, backups, and ingress connectors.</p></div><span id="system-health-status" class="badge">Checking…</span></div>
+            <div id="system-health-checks" class="connector-list" aria-live="polite"></div>
+          </article>
           <article class="panel tunnel-overview">
             <div class="panel-heading"><div><p class="eyebrow">Outbound ingress</p><h2>Cloudflare Tunnel connectors</h2><p class="muted">Each site can run its own supervised <code>cloudflared</code> connector and encrypted token.</p></div><span id="cloudflare-tunnel-status" class="badge">0 active</span></div>
             <div id="cloudflare-tunnel-list" class="connector-list"></div>

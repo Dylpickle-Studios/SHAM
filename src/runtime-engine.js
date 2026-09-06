@@ -39,8 +39,6 @@ function terminateProcessAndWait(child, graceMs = 10_000) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   return new Promise((resolve) => {
     let settled = false;
-    let forceTimer;
-    let fallbackTimer;
     const finish = () => {
       if (settled) return;
       settled = true;
@@ -49,9 +47,9 @@ function terminateProcessAndWait(child, graceMs = 10_000) {
       resolve();
     };
     child.once('exit', finish);
-    forceTimer = setTimeout(() => terminateProcess(child, 'SIGKILL'), Math.max(500, graceMs));
+    const forceTimer = setTimeout(() => terminateProcess(child, 'SIGKILL'), Math.max(500, graceMs));
     forceTimer.unref?.();
-    fallbackTimer = setTimeout(finish, Math.max(500, graceMs) + 3000);
+    const fallbackTimer = setTimeout(finish, Math.max(500, graceMs) + 3000);
     fallbackTimer.unref?.();
     terminateProcess(child, 'SIGTERM');
   });

@@ -360,7 +360,6 @@ function closeServer(server) {
   return /** @type {Promise<void>} */ (new Promise((resolve) => {
     if (!server?.listening) return resolve();
     let settled = false;
-    let forceTimer;
     let fallbackTimer;
     const finish = () => {
       if (settled) return;
@@ -369,7 +368,7 @@ function closeServer(server) {
       clearTimeout(fallbackTimer);
       resolve();
     };
-    forceTimer = setTimeout(() => {
+    const forceTimer = setTimeout(() => {
       server.closeAllConnections?.();
       fallbackTimer = setTimeout(finish, 1500);
       fallbackTimer.unref?.();

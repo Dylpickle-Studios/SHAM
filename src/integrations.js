@@ -178,7 +178,6 @@ function runProcess(command, args, { timeoutMs = 15 * 60 * 1000, onLine = () => 
     let output = '';
     let settled = false;
     let timedOut = false;
-    let timer;
     let forceTimer;
     let fallbackTimer;
     const append = (text) => {
@@ -207,7 +206,7 @@ function runProcess(command, args, { timeoutMs = 15 * 60 * 1000, onLine = () => 
       else if (code === 0) finish(resolve, output.trim());
       else finish(reject, new Error(`${command} exited with code ${code}. ${output.trim().slice(-1200)}`));
     });
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       timedOut = true;
       terminateProcess(child, 'SIGTERM');
       forceTimer = setTimeout(() => {

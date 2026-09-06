@@ -3,8 +3,44 @@
 const { DeploymentOperations } = require('./deployments');
 const { getRuntimeClient } = require('../runtime/client');
 const { fs, GIT_BIN, ANUBIS_IMAGE, encrypt, decrypt, getSecretSetting, commandAvailable, terminateAndWait, runProcess } = require('./shared');
+const { DATA_DIR, DB_PATH } = require('../config');
+
+/** @typedef {{ enabled?: boolean, connected?: boolean, lastError?: string }} ConnectorHealth */
 
 class OperationsManager extends DeploymentOperations {
+  /** @param {{ cloudflare?: ConnectorHealth | null, pangolin?: ConnectorHealth | null }} [connectors] */
+  async systemHealth({ cloudflare = null, pangolin = null } = {}) {
+    const checks = [];
+    const add = (id, label, status, detail, metadata = {}) => checks.push({ id, label, status, detail, ...metadata });
+    try {
+      const result = this.db.pragma('quick_check', { simple: true });
+      add('sqlite', 'SQLite integrity', result === 'ok' ? 'healthy' : 'error', result === 'ok' ? 'Integrity check passed.' : String(result));
+    } catch (error) { add('sqlite', 'SQLite integrity', 'error', error.message); }
+    try {
+      const storage = await fs.promises.statfs(DATA_DIR);
+      const totalBytes = Number(storage.blocks) * Number(storage.bsize);
+      const freeBytes = Number(storage.bavail) * Number(storage.bsize);
+      const freePercent = totalBytes ? Math.round((freeBytes / totalBytes) * 1000) / 10 : 0;
+      add('storage', 'Persistent storage', freePercent < 5 ? 'error' : freePercent < 15 ? 'warning' : 'healthy', `${freePercent}% free.`, { totalBytes, freeBytes, path: DATA_DIR });
+    } catch (error) { add('storage', 'Persistent storage', 'error', error.message); }
+    try {
+      const wal = await fs.promises.stat(`${DB_PATH}-wal`).catch(() => null);
+      add('wal', 'SQLite WAL', wal && wal.size > 256 * 1024 * 1024 ? 'warning' : 'healthy', wal ? `${wal.size} bytes.` : 'No WAL file is currently present.', { bytes: wal?.size || 0 });
+    } catch (error) { add('wal', 'SQLite WAL', 'warning', error.message); }
+    const capabilities = this.capabilities();
+    add('runtime-agent', 'Runtime Agent', capabilities.docker ? 'healthy' : 'warning', capabilities.docker ? 'Authenticated and Docker is reachable.' : capabilities.dockerReason || 'Unavailable.');
+    const latestBackup = this.db.prepare('SELECT status, finished_at AS finishedAt, detail FROM backup_runs ORDER BY id DESC LIMIT 1').get();
+    add('backup', 'Latest backup', !latestBackup ? 'warning' : latestBackup.status === 'success' ? 'healthy' : latestBackup.status === 'running' ? 'warning' : 'error', !latestBackup ? 'No backup has been recorded.' : `${latestBackup.status}${latestBackup.finishedAt ? ` at ${latestBackup.finishedAt}` : ''}.`, { lastCompletedAt: latestBackup?.status === 'success' ? latestBackup.finishedAt : null });
+    for (const { id, label, tunnel } of [{ id: 'cloudflare', label: 'Cloudflare Tunnel', tunnel: cloudflare }, { id: 'pangolin', label: 'Pangolin / Newt', tunnel: pangolin }]) {
+      if (!tunnel?.enabled) add(id, label, 'disabled', 'Not enabled.');
+      else if (tunnel.connected) add(id, label, 'healthy', 'Connector is connected.');
+      else add(id, label, 'warning', tunnel.lastError || 'Connector is enabled but not connected.');
+    }
+    const rank = { healthy: 0, disabled: 0, warning: 1, error: 2 };
+    const overall = checks.reduce((current, check) => rank[check.status] > rank[current] ? check.status : current, 'healthy');
+    return { overall, checkedAt: new Date().toISOString(), checks };
+  }
+
   validateAlertDestinationConfig(kind, input) {
     const config = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
     if (kind === 'email') {

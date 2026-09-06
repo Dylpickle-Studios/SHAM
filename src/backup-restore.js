@@ -9,82 +9,14 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
-const { spawn } = require('node:child_process');
-const { DATA_DIR, BACKUPS_DIR, TAR_BIN } = require('./config');
+const tar = require('tar');
+const { DATA_DIR, BACKUPS_DIR } = require('./config');
 
 const MARKER = path.join(DATA_DIR, '.restore-pending.json');
 const FAILED_MARKER = path.join(DATA_DIR, '.restore-failed.json');
-
-function runTar(args, timeoutMs = 10 * 60_000) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(TAR_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, LC_ALL: 'C' } });
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    let timer = null;
-    const finish = (error, value = '') => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) reject(error); else resolve(value);
-    };
-    child.stdout.on('data', (chunk) => { stdout = `${stdout}${chunk}`.slice(-2_000_000); });
-    child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-100_000); });
-    timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already exited */ } finish(new Error('Backup archive operation timed out.')); }, timeoutMs);
-    timer.unref?.();
-    child.once('error', (error) => finish(error));
-    child.once('exit', (code) => {
-      if (code === 0) finish(null, stdout);
-      else finish(new Error(`Backup archive command failed${stderr.trim() ? `: ${stderr.trim().slice(-2000)}` : '.'}`));
-    });
-  });
-}
-
-function inspectTarLines(args, onLine, timeoutMs = 10 * 60_000) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(TAR_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, LC_ALL: 'C' } });
-    let stderr = '';
-    let buffer = '';
-    let settled = false;
-    let timer = null;
-    const finish = (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) reject(error); else resolve();
-    };
-    const consume = (chunk) => {
-      buffer += chunk.toString();
-      if (buffer.length > 16 * 1024 && !buffer.includes('\n')) {
-        try { child.kill('SIGKILL'); } catch { /* already exited */ }
-        finish(new Error('Backup archive contains an excessively long entry name.'));
-        return;
-      }
-      let newline;
-      while (!settled && (newline = buffer.indexOf('\n')) !== -1) {
-        const line = buffer.slice(0, newline).replace(/\r$/, '');
-        buffer = buffer.slice(newline + 1);
-        try { onLine(line); }
-        catch (error) { try { child.kill('SIGKILL'); } catch { /* already exited */ } finish(error); }
-      }
-    };
-    child.stdout.on('data', consume);
-    child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-100_000); });
-    timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already exited */ } finish(new Error('Backup archive inspection timed out.')); }, timeoutMs);
-    timer.unref?.();
-    child.once('error', (error) => finish(error));
-    child.once('exit', (code) => {
-      if (settled) return;
-      if (buffer) {
-        try { onLine(buffer.replace(/\r$/, '')); }
-        catch (error) { finish(error); return; }
-      }
-      if (code === 0) finish(null);
-      else finish(new Error(`Backup archive inspection failed${stderr.trim() ? `: ${stderr.trim().slice(-2000)}` : '.'}`));
-    });
-  });
-}
+const WORK_ROOT = path.join(DATA_DIR, '.restore-work');
+const JOURNAL = path.join(WORK_ROOT, 'journal.json');
+const PRESERVED = new Set(['backups', 'updates', 'runtime-agent', '.restore-work', '.restore-pending.json', '.restore-failed.json']);
 
 function safeArchiveEntry(name) {
   const value = String(name || '').replace(/^\.\//, '');
@@ -100,27 +32,57 @@ async function verifyBackupArchive(archivePath) {
   const real = await fs.promises.realpath(resolved);
   if (real !== path.join(backupRoot, path.basename(real))) throw new Error('Only backup archives stored in SHAM’s local backup directory can be restored.');
   if (!/^sham-backup-.*\.tar\.gz$/.test(path.basename(real))) throw new Error('Backup filename is invalid.');
-  let entries = 0;
-  let hasDatabase = false;
-  await inspectTarLines(['-tzf', real], (line) => {
-    if (!line) return;
-    entries += 1;
-    if (entries > 250_000) throw new Error('Backup archive contains too many filesystem entries.');
-    if (Buffer.byteLength(line) > 4096 || !safeArchiveEntry(line)) throw new Error('Backup archive contains an unsafe or excessively long path.');
-    if (String(line).replace(/^\.\//, '') === 'sham.db') hasDatabase = true;
-  });
-  if (!entries) throw new Error('Backup archive is empty.');
-  if (!hasDatabase) throw new Error('Backup archive does not contain a SHAM database snapshot.');
+  const members = new Map();
+  let invalid = '';
+  // Read structured headers, including GNU/PAX long names, without parsing tar's human output.
+  await tar.t({ file: real, strict: true, onReadEntry(entry) {
+    if (invalid) return;
+    const name = path.posix.normalize(entry.path).replace(/\/$/, '');
+    if (!safeArchiveEntry(entry.path) || Buffer.byteLength(entry.path) > 4096 || entry.path.includes('\\')) { invalid = 'Backup archive contains an unsafe or excessively long path.'; return; }
+    if (!['File', 'OldFile', 'Directory', 'SymbolicLink', 'Link'].includes(entry.type)) { invalid = 'Backup archive contains a special filesystem entry.'; return; }
+    if (!name || name === '.') return;
+    if (members.has(name)) { invalid = `Backup archive repeats path ${name}.`; return; }
+    if (members.size >= 250_000) { invalid = 'Backup archive contains too many filesystem entries.'; return; }
+    members.set(name, { type: entry.type, linkpath: entry.linkpath });
+  } });
+  if (invalid) throw new Error(invalid);
+  if (!['File', 'OldFile'].includes(members.get('sham.db')?.type)) throw new Error('Backup archive does not contain a regular SHAM database snapshot.');
+  const links = new Map();
+  for (const [name, entry] of members) {
+    if (!['SymbolicLink', 'Link'].includes(entry.type)) continue;
+    const target = String(entry.linkpath || '');
+    if (!target || target.includes('\\') || target.includes('\0') || path.posix.isAbsolute(target) || /^[A-Za-z]:/.test(target)) throw new Error(`Backup link ${name} has an unsafe target.`);
+    links.set(name, entry);
+  }
+  const resolveLink = (name, visited = new Set()) => {
+    if (visited.has(name) || visited.size >= 40) throw new Error('Backup archive contains a cyclic or excessively deep link.');
+    const seen = new Set(visited).add(name);
+    const entry = links.get(name);
+    const resolved = entry.type === 'Link' ? [] : name.split('/').slice(0, -1);
+    for (const segment of entry.linkpath.split('/')) {
+      if (!segment || segment === '.') continue;
+      if (segment === '..') {
+        if (!resolved.length) throw new Error(`Backup link ${name} escapes the archive.`);
+        resolved.pop();
+      } else {
+        resolved.push(segment);
+        const prefix = resolved.join('/');
+        if (links.has(prefix)) resolved.splice(0, resolved.length, ...resolveLink(prefix, seen));
+      }
+    }
+    return resolved;
+  };
+  for (const [name, entry] of members) {
+    const parts = name.split('/');
+    for (let index = 1; index < parts.length; index += 1) {
+      if (links.has(parts.slice(0, index).join('/'))) throw new Error('Backup archive cannot write through a link.');
+    }
+    if (!links.has(name)) continue;
+    const target = resolveLink(name).join('/');
+    if (entry.type === 'Link' && !['File', 'OldFile'].includes(members.get(target)?.type)) throw new Error('Backup hard links must reference a regular archive file.');
+  }
+  return { archivePath: real, entries: members.size };
 
-  let typedEntries = 0;
-  await inspectTarLines(['-tvzf', real], (line) => {
-    if (!line) return;
-    typedEntries += 1;
-    const type = line[0];
-    if (type !== '-' && type !== 'd') throw new Error('Backup archive contains a link or special filesystem entry, which cannot be restored safely.');
-  });
-  if (typedEntries !== entries) throw new Error('Backup archive listing changed during verification.');
-  return { archivePath: real, entries };
 }
 
 async function stageBackupRestore(archivePath, metadata = {}) {
@@ -148,11 +110,11 @@ async function validateRestoreTree(root) {
       if (entries > 250_000) throw new Error('Backup restore contains too many filesystem entries.');
       const absolute = path.join(directory, item.name);
       const stat = await fs.promises.lstat(absolute);
-      if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) throw new Error(`Backup restore contains an unsupported filesystem entry: ${path.relative(root, absolute)}`);
+      if (!stat.isSymbolicLink() && !stat.isDirectory() && !stat.isFile()) throw new Error(`Backup restore contains an unsupported filesystem entry: ${path.relative(root, absolute)}`);
       if (stat.isDirectory()) stack.push(absolute);
     }
   }
-  for (const reserved of ['backups', 'updates']) {
+  for (const reserved of PRESERVED) {
     if (await fs.promises.lstat(path.join(root, reserved)).catch(() => null)) throw new Error(`Backup archive unexpectedly contains the reserved ${reserved} directory.`);
   }
   const databasePath = path.join(root, 'sham.db');
@@ -179,72 +141,85 @@ async function validateRestoreTree(root) {
   return entries;
 }
 
-async function movePreservedDirectory(fromRoot, toRoot, name) {
-  const source = path.join(fromRoot, name);
-  if (!await fs.promises.lstat(source).catch(() => null)) return;
-  const target = path.join(toRoot, name);
-  await fs.promises.rm(target, { recursive: true, force: true });
-  await fs.promises.rename(source, target);
+async function writeJournal(value) {
+  const temporary = `${JOURNAL}.tmp`;
+  const handle = await fs.promises.open(temporary, 'w', 0o600);
+  try { await handle.writeFile(`${JSON.stringify(value)}\n`); await handle.sync(); }
+  finally { await handle.close(); }
+  await fs.promises.rename(temporary, JOURNAL);
 }
 
-async function restoreOriginalDataDirectory(rollbackRoot) {
-  const currentExists = await fs.promises.lstat(DATA_DIR).catch(() => null);
-  if (currentExists) {
-    for (const name of ['backups', 'updates']) {
-      const currentPreserved = path.join(DATA_DIR, name);
-      const rollbackPreserved = path.join(rollbackRoot, name);
-      if (!await fs.promises.lstat(rollbackPreserved).catch(() => null) && await fs.promises.lstat(currentPreserved).catch(() => null)) {
-        await fs.promises.rename(currentPreserved, rollbackPreserved).catch(() => {});
-      }
+async function recoverInterruptedRestore() {
+  let journal;
+  try { journal = JSON.parse(await fs.promises.readFile(JOURNAL, 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  if (!['moving', 'installing', 'committed'].includes(journal.phase) || !Array.isArray(journal.incoming) || journal.incoming.some((name) => typeof name !== 'string' || !name || name === '.' || name === '..' || name.includes('/') || name.includes('\\') || PRESERVED.has(name))) throw new Error('Restore recovery journal is invalid; preserve .restore-work for manual recovery.');
+  const rollbackRoot = path.join(WORK_ROOT, 'rollback');
+  if (journal.phase !== 'committed') {
+    // Save progress while rolling back too: a second interruption must never delete an already restored entry.
+    journal.restored ||= [];
+    for (const name of journal.incoming) {
+      if (journal.phase === 'installing' && !journal.restored.includes(name)) await fs.promises.rm(path.join(DATA_DIR, name), { recursive: true, force: true });
     }
-    await fs.promises.rm(DATA_DIR, { recursive: true, force: true });
+    for (const name of await fs.promises.readdir(rollbackRoot).catch((error) => { if (error.code === 'ENOENT') return []; throw error; })) {
+      const source = path.join(rollbackRoot, name);
+      const target = path.join(DATA_DIR, name);
+      // Record intent before renaming; on a retry, an extant rollback entry always wins.
+      if (!journal.restored.includes(name)) { journal.restored.push(name); await writeJournal(journal); }
+      await fs.promises.rm(target, { recursive: true, force: true });
+      await fs.promises.rename(source, target);
+    }
   }
-  if (await fs.promises.lstat(rollbackRoot).catch(() => null)) await fs.promises.rename(rollbackRoot, DATA_DIR);
+  await fs.promises.rm(JOURNAL, { force: true });
+  await fs.promises.rm(path.join(WORK_ROOT, 'stage'), { recursive: true, force: true });
+  await fs.promises.rm(rollbackRoot, { recursive: true, force: true });
 }
 
 async function applyPendingRestore() {
-  let marker;
-  try { marker = JSON.parse(await fs.promises.readFile(MARKER, 'utf8')); }
-  catch (error) {
-    if (error.code === 'ENOENT') return null;
-    throw new Error(`Could not read pending backup restore: ${error.message}`);
-  }
-  const parent = path.dirname(DATA_DIR);
-  const base = path.basename(DATA_DIR);
-  const nonce = crypto.randomUUID();
-  const stageRoot = path.join(parent, `.${base}-restore-stage-${nonce}`);
-  const rollbackRoot = path.join(parent, `.${base}-restore-rollback-${nonce}`);
-  let swapped = false;
+  const pending = await fs.promises.readFile(MARKER, 'utf8').catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
+  const interrupted = await fs.promises.stat(JOURNAL).catch(() => null);
+  if (!pending && !interrupted && !fs.existsSync(path.join(WORK_ROOT, 'agent-paused'))) return null;
+  const marker = pending ? JSON.parse(pending) : {};
+  await fs.promises.mkdir(WORK_ROOT, { recursive: true, mode: 0o700 });
+  const { pauseRuntimeAgent, resumeRuntimeAgent } = require('./restore-coordination');
+  await pauseRuntimeAgent();
+  const stageRoot = path.join(WORK_ROOT, 'stage');
+  const rollbackRoot = path.join(WORK_ROOT, 'rollback');
   try {
+    await recoverInterruptedRestore();
+    if (!pending) return null;
     const verified = await verifyBackupArchive(marker.archivePath);
-    await fs.promises.mkdir(stageRoot, { recursive: false, mode: 0o700 });
-    await runTar(['-xzf', verified.archivePath, '-C', stageRoot, '--no-same-owner', '--no-same-permissions'], 20 * 60_000);
+    await fs.promises.rm(rollbackRoot, { recursive: true, force: true });
+    await fs.promises.rm(stageRoot, { recursive: true, force: true });
+    await fs.promises.mkdir(stageRoot, { mode: 0o700 });
+    await tar.x({ file: verified.archivePath, cwd: stageRoot, strict: true, preservePaths: false, preserveOwner: false, chmod: true,
+      filter: (name) => !PRESERVED.has(name.replace(/^\.\//, '').split('/')[0]) });
     const entries = await validateRestoreTree(stageRoot);
-
-    // The current directory remains untouched until the archive has extracted and validated successfully.
-    await fs.promises.rename(DATA_DIR, rollbackRoot);
-    try {
-      await fs.promises.rename(stageRoot, DATA_DIR);
-      swapped = true;
-      await movePreservedDirectory(rollbackRoot, DATA_DIR, 'backups');
-      await movePreservedDirectory(rollbackRoot, DATA_DIR, 'updates');
-      await fs.promises.rm(MARKER, { force: true }).catch(() => {});
-      await fs.promises.rm(FAILED_MARKER, { force: true }).catch(() => {});
-      await fs.promises.rm(rollbackRoot, { recursive: true, force: true });
-    } catch (error) {
-      await restoreOriginalDataDirectory(rollbackRoot).catch((rollbackError) => {
-        error.message = `${error.message}; automatic restore rollback also failed: ${rollbackError.message}`;
-      });
-      swapped = false;
-      throw error;
+    await fs.promises.mkdir(rollbackRoot, { mode: 0o700 });
+    const incoming = await fs.promises.readdir(stageRoot);
+    const journal = { phase: 'moving', incoming, restored: [] };
+    await writeJournal(journal);
+    for (const name of await fs.promises.readdir(DATA_DIR)) {
+      if (!PRESERVED.has(name)) await fs.promises.rename(path.join(DATA_DIR, name), path.join(rollbackRoot, name));
     }
-    return { archivePath: path.join(BACKUPS_DIR, path.basename(verified.archivePath)), requestedAt: marker.requestedAt || null, backupRunId: marker.backupRunId || null, entries };
+    journal.phase = 'installing';
+    await writeJournal(journal);
+    for (const name of incoming) await fs.promises.rename(path.join(stageRoot, name), path.join(DATA_DIR, name));
+    journal.phase = 'committed';
+    await writeJournal(journal);
+    await fs.promises.rm(MARKER, { force: true });
+    await fs.promises.rm(FAILED_MARKER, { force: true });
+    await recoverInterruptedRestore();
+    return { archivePath: verified.archivePath, requestedAt: marker.requestedAt || null, backupRunId: marker.backupRunId || null, entries };
   } catch (error) {
-    if (!swapped) await fs.promises.rm(stageRoot, { recursive: true, force: true }).catch(() => {});
-    await fs.promises.mkdir(DATA_DIR, { recursive: true, mode: 0o700 }).catch(() => {});
-    await fs.promises.writeFile(FAILED_MARKER, `${JSON.stringify({ ...marker, failedAt: new Date().toISOString(), error: error.message }, null, 2)}\n`, { mode: 0o600 }).catch(() => {});
-    await fs.promises.rm(MARKER, { force: true }).catch(() => {});
+    try { await recoverInterruptedRestore(); }
+    catch (rollbackError) { throw new Error(`${error.message}; automatic restore rollback failed: ${rollbackError.message}. Preserve .restore-work and retry startup.`); }
+    await fs.promises.writeFile(FAILED_MARKER, `${JSON.stringify({ ...marker, failedAt: new Date().toISOString(), error: error.message }, null, 2)}\n`, { mode: 0o600 });
+    await fs.promises.rm(MARKER, { force: true });
     throw error;
+  } finally {
+    // Keep the agent paused if recovery still needs to finish on the next startup.
+    if (!await fs.promises.stat(JOURNAL).catch(() => null)) await resumeRuntimeAgent();
   }
 }
-module.exports = { MARKER, FAILED_MARKER, safeArchiveEntry, verifyBackupArchive, stageBackupRestore, applyPendingRestore };
+module.exports = { MARKER, FAILED_MARKER, safeArchiveEntry, verifyBackupArchive, stageBackupRestore, applyPendingRestore, recoverInterruptedRestore };

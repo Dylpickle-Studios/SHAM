@@ -292,8 +292,7 @@ class ConfigurationOperations {
     const runId = Number(this.db.prepare("INSERT INTO job_runs (job_id, status, output) VALUES (?, 'running', '')").run(job.id).lastInsertRowid);
     const started = Date.now();
     let output = '';
-    let operation;
-    operation = this.executeSiteCommand(site, job.command, Math.min(job.timeout_seconds * 1000, 86400_000), (level, line) => {
+    const operation = this.executeSiteCommand(site, job.command, Math.min(job.timeout_seconds * 1000, 86400_000), (level, line) => {
       output = appendTail(output, `[${level}] ${line}\n`);
       this.manager.log(site.id, level, `job ${job.name}: ${line}`);
     }).then(() => {
@@ -398,11 +397,11 @@ class ConfigurationOperations {
       databaseSnapshotDirectory = await fs.promises.mkdtemp(path.join(DATA_DIR, 'tmp', 'backup-db-'));
       await this.db.backup(path.join(databaseSnapshotDirectory, 'sham.db'));
       await runProcess(TAR_BIN, [
-        '--exclude=./tmp', '--exclude=./backups', '--exclude=./updates',
+        '--exclude=./tmp', '--exclude=./backups', '--exclude=./updates', '--exclude=./runtime-agent', '--exclude=./.restore-*',
         '--exclude=./sham.db', '--exclude=./sham.db-wal', '--exclude=./sham.db-shm',
         '-czf', localPath, '-C', DATA_DIR, '.', '-C', databaseSnapshotDirectory, 'sham.db'
       ], this.trackedProcessOptions({ timeoutMs: BACKUP_TIMEOUT_MS, onLine: (level, line) => this.manager.log(null, level, `backup: ${line}`) }));
-      await runProcess(TAR_BIN, ['-tzf', localPath], this.trackedProcessOptions({ timeoutMs: Math.min(BACKUP_TIMEOUT_MS, 10 * 60 * 1000) }));
+      await require('../backup-restore').verifyBackupArchive(localPath);
       await fs.promises.chmod(localPath, 0o600);
 
       const stat = await fs.promises.stat(localPath);

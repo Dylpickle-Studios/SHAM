@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { operatorEnvironment } = require('../src/process-env');
 const { DOCKER_BIN, PACK_BIN, NIXPACKS_BIN, DOCKER_INTERNAL_NETWORK, DOCKER_EGRESS_NETWORK, ANUBIS_IMAGE, DATA_DIR } = require('../src/config');
@@ -25,6 +26,33 @@ class AgentOperationError extends Error {
   }
 }
 
+// Resolve tools using only the agent's configured environment, never a workload PATH.
+function trustedTool(bin) {
+  if (path.isAbsolute(bin)) return bin;
+  for (const directory of String(operatorEnvironment().PATH || '/usr/bin:/bin').split(path.delimiter)) {
+    if (!path.isAbsolute(directory)) continue;
+    const candidate = path.join(directory, bin);
+    try { fs.accessSync(candidate, fs.constants.X_OK); return candidate; } catch { /* next directory */ }
+  }
+  throw new Error(`Agent executable is unavailable: ${bin}`);
+}
+
+async function withEnvironmentFile(env, compose, callback) {
+  const values = assertEnv(env);
+  const lines = Object.entries(values).map(([key, value]) => {
+    if (compose && /^(?:COMPOSE_|DOCKER_)/i.test(key)) throw new ValidationError(`Environment variable ${key} is reserved for the runtime agent.`);
+    if (/[\r\n]/.test(value)) throw new ValidationError(`Environment variable ${key} cannot contain a newline when passed to Docker.`);
+    // Quote dotenv values and escape interpolation separately from string escapes.
+    return compose ? `${key}=${JSON.stringify(value).replaceAll('$', '\\$')}` : `${key}=${value}`;
+  });
+  const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sham-agent-env-'));
+  try {
+    const filename = path.join(directory, 'environment');
+    await fs.promises.writeFile(filename, `${lines.join('\n')}\n`, { mode: 0o600, flag: 'wx' });
+    return await callback(filename);
+  } finally { await fs.promises.rm(directory, { recursive: true, force: true }); }
+}
+
 /**
  * @typedef {Object} RunToolOptions
  * @property {string} [cwd]
@@ -33,6 +61,7 @@ class AgentOperationError extends Error {
  * @property {((level: 'info' | 'error', line: string) => void) | null} [onLine]
  * @property {number} [maxOutputBytes]
  * @property {boolean} [rejectOutputOverflow]
+ * @property {boolean} [composeEnvironmentReady]
  */
 /** @typedef {{ stdout: string, stderr: string, code: 0 }} RunToolResult */
 
@@ -42,10 +71,13 @@ class AgentOperationError extends Error {
  * @param {RunToolOptions} [options]
  * @returns {Promise<RunToolResult>}
  */
-function runTool(bin, args, { cwd, env, timeoutMs = 20 * 60_000, onLine = null, maxOutputBytes = 200_000, rejectOutputOverflow = false } = {}) {
+function runTool(bin, args, { cwd, env, timeoutMs = 20 * 60_000, onLine = null, maxOutputBytes = 200_000, rejectOutputOverflow = false, composeEnvironmentReady = false } = {}) {
+  if (args[0] === 'compose' && !composeEnvironmentReady) {
+    return withEnvironmentFile(env, true, (filename) => runTool(bin, ['compose', '--env-file', filename, ...args.slice(1)], { cwd, timeoutMs, onLine, maxOutputBytes, rejectOutputOverflow, composeEnvironmentReady: true }));
+  }
   return new Promise((resolve, reject) => {
     let child;
-    try { child = spawn(bin, args, { cwd, env: { ...operatorEnvironment(), ...(env || {}) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }); }
+    try { child = spawn(trustedTool(bin), args, { cwd, env: operatorEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }); }
     catch (error) { reject(error); return; }
     let stdout = '';
     let stderr = '';
@@ -93,8 +125,8 @@ function runTool(bin, args, { cwd, env, timeoutMs = 20 * 60_000, onLine = null, 
  * @param {string[]} args
  * @param {{ cwd?: string, env?: Record<string, string> }} [options]
  */
-function spawnStreaming(bin, args, { cwd, env } = {}) {
-  return spawn(bin, args, { cwd, env: { ...operatorEnvironment(), ...(env || {}) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+function spawnStreaming(bin, args, { cwd } = {}) {
+  return spawn(trustedTool(bin), args, { cwd, env: operatorEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 }
 
 function projectRoot(candidate) { return assertPathInsideRoot(DATA_DIR, candidate, 'Path'); }
@@ -137,6 +169,10 @@ async function assertOwnedContainer(ref) {
   return inspected;
 }
 
+function validateComposeService(service) {
+  if (typeof service !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(service)) throw new ValidationError('Compose service name is invalid.');
+}
+
 function composeFileArgs(files) { return files.flatMap((file) => ['-f', file]); }
 
 function validateComposeFiles(files) {
@@ -144,10 +180,11 @@ function validateComposeFiles(files) {
   return files.map((file) => projectRoot(file));
 }
 
-async function fetchAndValidateComposeConfig({ files, cwd, env, service, containerPort }) {
+async function fetchAndValidateComposeConfig({ files, cwd, env, service, containerPort, project = '' }) {
   const validatedFiles = validateComposeFiles(files);
   const root = projectRoot(cwd);
-  const result = await runTool(DOCKER_BIN, ['compose', ...composeFileArgs(validatedFiles), 'config', '--format', 'json'], { cwd: root, env, timeoutMs: 30_000, maxOutputBytes: 2 * 1024 * 1024, rejectOutputOverflow: true });
+  validateComposeService(service);
+  const result = await runTool(DOCKER_BIN, ['compose', ...(project ? ['-p', project] : []), ...composeFileArgs(validatedFiles), 'config', '--format', 'json'], { cwd: root, env, timeoutMs: 30_000, maxOutputBytes: 2 * 1024 * 1024, rejectOutputOverflow: true });
   let config;
   try { config = JSON.parse(result.stdout); } catch { throw new Error('Docker Compose did not return a valid normalized configuration.'); }
   try {
@@ -205,6 +242,14 @@ function validatePortSpec(ports) {
   });
 }
 
+async function ensureDataVolume(name, siteId) {
+  if (name !== `sham-site-${siteId}-data`) throw new ValidationError('Named volume must belong to this SHAM site.');
+  await runTool(DOCKER_BIN, ['volume', 'create', '--driver', 'local', '--label', MANAGED_LABEL, '--label', `sham.site_id=${siteId}`, name], { timeoutMs: 15_000 });
+  const result = await runTool(DOCKER_BIN, ['volume', 'inspect', name], { timeoutMs: 15_000 });
+  const volume = JSON.parse(result.stdout)?.[0];
+  if (volume?.Name !== name || volume?.Driver !== 'local' || Object.keys(volume?.Options || {}).length) throw new ValidationError('SHAM data volumes cannot use custom drivers or host mount options.');
+}
+
 async function containersRun(params) {
   const name = assertContainerName(params.name, 'Container name');
   const image = assertImageTag(params.image, 'Image');
@@ -213,7 +258,7 @@ async function containersRun(params) {
   const env = assertEnv(params.env, 'Environment');
   const dataMount = params.dataMount ? { source: params.dataMount.source, target: assertContainerPath(params.dataMount.target) } : null;
   const namedVolume = params.namedVolume ? String(params.namedVolume).slice(0, 200) : null;
-  if (namedVolume && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,120}$/.test(namedVolume)) throw new ValidationError('Named volume is invalid.');
+  if (namedVolume && namedVolume !== `sham-site-${siteId}-data`) throw new ValidationError('Named volume must belong to this SHAM site.');
   const memoryMb = params.memoryMb ? assertPositiveInt(params.memoryMb, 'Memory limit', { min: 1, max: 1_048_576 }) : 0;
   const cpuLimit = params.cpuLimit ? Number(params.cpuLimit) : 0;
   const pidsLimit = assertPositiveInt(params.pidsLimit, 'PID limit', { min: 1, max: 100_000, fallback: 128 });
@@ -231,21 +276,22 @@ async function containersRun(params) {
   if (dataMount) projectRoot(dataMount.source);
   if (dataMount && agentContainerized() && !String(process.env.SHAM_DOCKER_HOST_DATA_PATH || '').trim()) {
     if (!namedVolume) throw new Error('A named volume fallback is required when the runtime agent has no host data path configured.');
+    await ensureDataVolume(namedVolume, siteId);
     args.push('-v', `${namedVolume}:${dataMount.target}:rw`);
   } else if (dataMount) {
     args.push('-v', `${hostBindPath(dataMount.source)}:${dataMount.target}:rw`);
   } else if (namedVolume) {
+    await ensureDataVolume(namedVolume, siteId);
     args.push('-v', `${namedVolume}:/data:rw`);
   }
   if (network) args.push('--network', network);
   for (const binding of validatePortSpec(params.ports)) args.push('-p', binding);
   if (memoryMb > 0) args.push('--memory', `${memoryMb}m`);
   if (cpuLimit > 0 && Number.isFinite(cpuLimit)) args.push('--cpus', String(cpuLimit));
-  for (const key of Object.keys(env)) args.push('-e', key);
   args.push(image);
   if (command) args.push(...command);
 
-  const result = await runTool(DOCKER_BIN, args, { env, timeoutMs: 120_000 });
+  const result = await withEnvironmentFile(env, false, (filename) => runTool(DOCKER_BIN, [args[0], '--env-file', filename, ...args.slice(1)], { timeoutMs: 120_000 }));
   const containerId = result.stdout.split(/\s+/).at(-1) || name;
   return { containerId, name };
 }
@@ -415,7 +461,7 @@ async function composeConfigOp({ files, cwd, env, service, containerPort }) {
 
 async function composeUp({ project, files, cwd, env, service, containerPort }, emit) {
   const projectName = assertComposeProject(project, 'Compose project');
-  const { root, validatedFiles } = await fetchAndValidateComposeConfig({ files, cwd, env, service, containerPort });
+  const { root, validatedFiles } = await fetchAndValidateComposeConfig({ files, cwd, env, service, containerPort, project: projectName });
   await runTool(DOCKER_BIN, ['compose', '-p', projectName, ...composeFileArgs(validatedFiles), 'up', '-d', '--build', service], {
     cwd: root, env, onLine: (level, line) => emit({ type: 'log', level, line })
   });
@@ -426,6 +472,7 @@ async function composePs({ project, files, cwd, env, service }) {
   const projectName = assertComposeProject(project, 'Compose project');
   const validatedFiles = validateComposeFiles(files);
   const root = projectRoot(cwd);
+  validateComposeService(service);
   const result = await runTool(DOCKER_BIN, ['compose', '-p', projectName, ...composeFileArgs(validatedFiles), 'ps', '-q', service], { cwd: root, env, timeoutMs: 30_000 });
   return { containerId: result.stdout.trim() };
 }
@@ -434,6 +481,7 @@ async function composePort({ project, files, cwd, env, service, containerPort })
   const projectName = assertComposeProject(project, 'Compose project');
   const validatedFiles = validateComposeFiles(files);
   const root = projectRoot(cwd);
+  validateComposeService(service);
   const port = assertPort(containerPort, 'Container port');
   const result = await runTool(DOCKER_BIN, ['compose', '-p', projectName, ...composeFileArgs(validatedFiles), 'port', service, String(port)], { cwd: root, env, timeoutMs: 30_000 });
   const match = /:(\d+)\s*$/.exec(result.stdout.trim());
@@ -453,6 +501,7 @@ async function composeExec({ project, files, cwd, env, service, command, timeout
   const projectName = assertComposeProject(project, 'Compose project');
   const validatedFiles = validateComposeFiles(files);
   const root = projectRoot(cwd);
+  validateComposeService(service);
   const cmd = assertCommandString(command, 'Command');
   const timeout = assertPositiveInt(timeoutMs, 'Timeout', { min: 100, max: 300_000, fallback: 5000 });
   await runTool(DOCKER_BIN, ['compose', '-p', projectName, ...composeFileArgs(validatedFiles), 'exec', '-T', service, '/bin/sh', '-lc', cmd], { cwd: root, env, timeoutMs: timeout, onLine: (level, line) => emit({ type: 'log', level, line }) });
@@ -484,6 +533,18 @@ async function cleanupManagedContainers() {
   const result = await runTool(DOCKER_BIN, ['ps', '-aq', '--filter', `label=${MANAGED_LABEL}`], { timeoutMs: 20_000 });
   for (const id of result.stdout.split(/\s+/).filter(Boolean)) await runTool(DOCKER_BIN, ['rm', '-f', id], { timeoutMs: 30_000 }).catch(() => {});
   return { cleaned: true };
+}
+
+async function quiesceForRestore() {
+  // Stop every SHAM-owned workload, including Compose auxiliary services that
+  // have only Compose's project label. Never stop unrelated host containers.
+  const result = await runTool(DOCKER_BIN, ['ps', '-q'], { timeoutMs: 15_000 });
+  for (const id of result.stdout.split(/\s+/).filter(Boolean)) {
+    const inspected = await inspectRef(id);
+    if (!inspected) throw new Error('Could not inspect a running container before restore.');
+    if (isManaged(inspected)) await runTool(DOCKER_BIN, ['stop', '--time', '10', inspected.Id], { timeoutMs: 20_000 });
+  }
+  return { paused: true };
 }
 
 async function cleanupManagedImages() {
@@ -527,5 +588,5 @@ module.exports = {
   networksEnsure, networksConnect,
   composeConfigOp, composeUp, composePs, composePort, composeDown, composeExec,
   cleanupComposeProject, cleanupOrphanedComposeProject, cleanupManagedContainers, cleanupManagedImages,
-  status
+  status, quiesceForRestore
 };

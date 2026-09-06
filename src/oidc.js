@@ -155,7 +155,12 @@ async function verifyIdToken(idToken, { issuer, clientId, nonce, discoveryDocume
   return claims;
 }
 
-async function beginAuthorization({ issuer, clientId, redirectUri, db }) {
+function boundStateHash(state, browserBinding) {
+  if (typeof browserBinding !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(browserBinding)) throw new Error('OIDC login browser binding is missing or invalid. Start sign-in again.');
+  return hashState(`${state}:${browserBinding}`);
+}
+
+async function beginAuthorization({ issuer, clientId, redirectUri, db, browserBinding }) {
   const document = await discovery(issuer);
   const state = crypto.randomBytes(32).toString('base64url');
   const nonce = crypto.randomBytes(32).toString('base64url');
@@ -163,7 +168,7 @@ async function beginAuthorization({ issuer, clientId, redirectUri, db }) {
   const challenge = b64url(sha256(verifier));
   db.prepare('DELETE FROM oidc_states WHERE expires_at < ?').run(Date.now());
   db.prepare('INSERT INTO oidc_states (state_hash, nonce, verifier, redirect_uri, expires_at) VALUES (?, ?, ?, ?, ?)')
-    .run(hashState(state), nonce, verifier, redirectUri, Date.now() + 10 * 60_000);
+    .run(boundStateHash(state, browserBinding), nonce, verifier, redirectUri, Date.now() + 10 * 60_000);
   const url = new URL(document.authorization_endpoint);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', clientId);
@@ -176,10 +181,11 @@ async function beginAuthorization({ issuer, clientId, redirectUri, db }) {
   return url.href;
 }
 
-async function completeAuthorization({ issuer, clientId, clientSecret, state, code, redirectUri, db }) {
+async function completeAuthorization({ issuer, clientId, clientSecret, state, code, redirectUri, db, browserBinding }) {
+  const stateKey = boundStateHash(state, browserBinding);
   const transaction = db.transaction(() => {
-    const row = db.prepare('SELECT * FROM oidc_states WHERE state_hash = ?').get(hashState(state));
-    if (row) db.prepare('DELETE FROM oidc_states WHERE state_hash = ?').run(hashState(state));
+    const row = db.prepare('SELECT * FROM oidc_states WHERE state_hash = ?').get(stateKey);
+    if (row) db.prepare('DELETE FROM oidc_states WHERE state_hash = ?').run(stateKey);
     return row;
   });
   const stored = transaction();

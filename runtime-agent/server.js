@@ -1,6 +1,8 @@
 'use strict';
 
 const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
 const { PROTOCOL_VERSION, PROTOCOL_HEADER, MAX_REQUEST_BODY_BYTES, OPERATIONS, ERROR_CODES } = require('../src/runtime/protocol');
 const { DATA_DIR } = require('../src/config');
 const { tokensMatch, extractBearerToken } = require('./auth');
@@ -10,6 +12,7 @@ const { log } = require('./logger');
 
 const ROUTES = {
   STATUS: { fn: () => docker.status(), describe: () => ({}) },
+  RESTORE_QUIESCE: { fn: () => docker.quiesceForRestore(), describe: () => ({}) },
   IMAGES_BUILD: { fn: docker.imagesBuild, stream: true, describe: (b) => ({ tag: b.tag, mode: b.mode }) },
   IMAGES_REMOVE: { fn: docker.imagesRemove, describe: (b) => ({ tag: b.tag }) },
   CONTAINERS_RUN: { fn: docker.containersRun, describe: (b) => ({ name: b.name, siteId: b.siteId }) },
@@ -125,7 +128,7 @@ function readBody(req) {
   });
 }
 
-async function handleRequest(req, res, { token }) {
+async function handleRequest(req, res, { token, operations }) {
   const url = req.url.split('?')[0];
 
   if (req.method === 'GET' && url === '/health') { sendJson(res, 200, { status: 'ok' }); return; }
@@ -168,9 +171,26 @@ async function handleRequest(req, res, { token }) {
     return;
   }
 
+  const pauseFile = path.join(DATA_DIR, '.restore-work', 'agent-paused');
+  if (route.key === 'RESTORE_QUIESCE') {
+    if (!fs.existsSync(pauseFile)) return sendError(res, 409, ERROR_CODES.OPERATION_FAILED, 'Restore pause marker is required.');
+    const deadline = Date.now() + 30_000;
+    while (operations.active && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+    if (operations.active) return sendError(res, 409, ERROR_CODES.OPERATION_FAILED, 'Runtime operations are still active; retry restore after they finish.');
+  } else if (route.key !== 'STATUS' && fs.existsSync(pauseFile)) {
+    return sendError(res, 503, ERROR_CODES.OPERATION_FAILED, 'Runtime Agent is paused for backup restore.');
+  }
+  /** @param {((line: any) => void) | undefined} [emit] */
+  const invoke = async (emit = undefined) => {
+    const tracked = !['STATUS', 'CONTAINERS_LOGS', 'CONTAINERS_WAIT'].includes(route.key);
+    if (tracked) operations.active += 1;
+    try { return await route.fn(body, emit); }
+    finally { if (tracked) operations.active -= 1; }
+  };
+
   if (!route.stream) {
     try {
-      const result = await route.fn(body);
+      const result = await invoke();
       log(logEvent, { ...describe, outcome: 'ok' });
       sendJson(res, 200, result === undefined ? {} : result);
     } catch (error) {
@@ -195,7 +215,7 @@ async function handleRequest(req, res, { token }) {
   };
   const emit = (line) => { ensureHeaders(); if (!res.writableEnded) res.write(`${JSON.stringify(line)}\n`); };
   try {
-    await route.fn(body, emit);
+    await invoke(emit);
     log(logEvent, { ...describe, outcome: 'ok' });
   } catch (error) {
     log(logEvent, { ...describe, outcome: 'error', error: error.message });
@@ -211,8 +231,9 @@ async function handleRequest(req, res, { token }) {
 }
 
 function createServer({ token }) {
+  const operations = { active: 0 };
   const server = http.createServer((req, res) => {
-    handleRequest(req, res, { token }).catch((error) => {
+    handleRequest(req, res, { token, operations }).catch((error) => {
       if (!res.headersSent) sendError(res, 500, ERROR_CODES.INTERNAL, error.message);
       else res.destroy();
     });

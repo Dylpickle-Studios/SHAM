@@ -373,6 +373,13 @@ function renderOperationsInstance(payload) {
   $('#setup-checklist').innerHTML = `<div class="panel-heading"><div><h2>Readiness checklist</h2><p class="muted">Recommended safeguards before exposing production sites.</p></div><span class="badge">${checklist.filter(([, ready]) => ready).length}/${checklist.length}</span></div><div class="checklist-grid">${checklist.map(([label, ready]) => `<div class="checklist-item ${ready ? 'complete' : ''}"><span>${ready ? '✓' : '○'}</span><strong>${escapeHtml(label)}</strong></div>`).join('')}</div>`;
 }
 
+function renderSystemHealth(health = {}) {
+  const overall = health.overall || 'warning';
+  $('#system-health-status').textContent = overall === 'healthy' ? 'Healthy' : overall === 'error' ? 'Action required' : 'Needs attention';
+  $('#system-health-status').className = `badge ${overall === 'healthy' ? 'success' : overall === 'error' ? 'error' : 'warning'}`;
+  $('#system-health-checks').innerHTML = (health.checks || []).map((check) => `<div class="connector-row"><div class="connector-mark">${check.status === 'healthy' ? '✓' : check.status === 'disabled' ? '○' : '!'}</div><div><strong>${escapeHtml(check.label)}</strong><span>${escapeHtml(check.detail)}</span></div><span class="badge ${check.status === 'healthy' ? 'success' : check.status === 'error' ? 'error' : check.status === 'warning' ? 'warning' : ''}">${escapeHtml(check.status)}</span></div>`).join('') || '<p class="muted">No health results are available.</p>';
+}
+
 async function loadOperations() {
   if (state.user?.role !== 'admin') return;
   const requestId = ++state.operationsRequest;
@@ -384,11 +391,12 @@ async function loadOperations() {
   if (state.sites.some((site) => site.id === previous)) selector.value = String(previous);
   state.operationsSiteId = Number(selector.value || 0) || null;
   try {
-    const [instance, sitePayload, security, filters] = await Promise.all([
+    const [instance, sitePayload, security, filters, systemHealth] = await Promise.all([
       api('/api/admin/operations'),
       state.operationsSiteId ? api(`/api/sites/${state.operationsSiteId}/operations`) : Promise.resolve(null),
       api('/api/security'),
-      api('/api/log-filters')
+      api('/api/log-filters'),
+      api('/api/admin/system-health')
     ]);
     if (requestId !== state.operationsRequest) return;
     state.logFilters = filters.filters || [];
@@ -396,6 +404,7 @@ async function loadOperations() {
     state.security = security;
     state.operations = { instance, site: sitePayload };
     renderOperationsInstance(instance);
+    renderSystemHealth(systemHealth.health);
     if (sitePayload) renderOperationsSite(sitePayload);
   } catch (error) { if (requestId === state.operationsRequest) toast(error.message, 'error'); }
   finally { if (requestId === state.operationsRequest) setBusy(button, false); }

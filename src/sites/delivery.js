@@ -290,6 +290,10 @@ class DeliverySiteManager extends CoreSiteManager {
     app.disable('x-powered-by');
     app.use((req, res, next) => {
       this.applyHeaders(site, res, req);
+      // Apply the same policy before optimized assets, sidecars and fallbacks.
+      try {
+        if (decodeURIComponent(req.path).replaceAll('\\', '/').split('/').some((part) => part.startsWith('.'))) return res.sendStatus(404);
+      } catch { return res.sendStatus(404); }
       next();
     });
 
@@ -445,7 +449,6 @@ class DeliverySiteManager extends CoreSiteManager {
       let output = '';
       let settled = false;
       let timedOut = false;
-      let timer;
       let forceTimer;
       let fallbackTimer;
       const finish = (callback, value) => {
@@ -464,7 +467,7 @@ class DeliverySiteManager extends CoreSiteManager {
       };
       child.stdout.on('data', (chunk) => logChunk('info', chunk));
       child.stderr.on('data', (chunk) => logChunk('error', chunk));
-      timer = setTimeout(() => {
+      const timer = setTimeout(() => {
         timedOut = true;
         terminateChild(child, 'SIGTERM');
         forceTimer = setTimeout(() => {

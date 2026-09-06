@@ -110,8 +110,17 @@ test('backup restore drill validates archive, database, releases, secrets, and r
     await sham.deployGit(site);
     await sham.waitForEdge(site.domain, 'SHAM_TEST_VERSION_2');
 
+    const activeSite = (await sham.request('/api/sites')).sites.find((item) => item.id === site.id);
+    const dependencyRoot = path.join(sham.dataDir, 'releases', String(site.id), activeSite.active_release_directory, 'node_modules');
+    await fs.mkdir(path.join(dependencyRoot, '.bin'), { recursive: true });
+    await fs.mkdir(path.join(dependencyRoot, 'audit-tool'), { recursive: true });
+    await fs.writeFile(path.join(dependencyRoot, 'audit-tool', 'cli.js'), 'backup dependency fixture', { mode: 0o755 });
+    await fs.symlink('../audit-tool/cli.js', path.join(dependencyRoot, '.bin', 'audit-tool'));
+
     const backup = (await sham.request('/api/admin/backups/run', { method: 'POST', body: { provider: 'local' } })).backup;
     assert.equal(backup.verified, true);
+    const health = (await sham.request('/api/admin/system-health')).health;
+    assert.equal(health.checks.find((item) => item.id === 'backup').status, 'healthy');
     const archive = await verifyArchive(sham.dataDir, backup.filename);
     assert.ok(archive.entries > 0);
 
@@ -124,6 +133,7 @@ test('backup restore drill validates archive, database, releases, secrets, and r
     await waitFor(() => sqliteQuickCheck(sham.dataDir) === 'ok', { message: 'Restored SQLite database did not pass quick_check.' });
     const restored = (await sham.request('/api/sites')).sites.find((item) => item.id === site.id);
     assert.ok(restored, 'restore must recover deleted site configuration');
+    assert.equal(await fs.readFile(path.join(dependencyRoot, '.bin', 'audit-tool'), 'utf8'), 'backup dependency fixture');
     await fs.access(path.join(sham.dataDir, 'releases', String(restored.id), restored.active_release_directory, 'server.js'));
     const revealed = await sham.request(`/api/sites/${site.id}/environment/RECOVERY_SECRET/reveal`, {
       method: 'POST', body: { password: 'integration-password-123!' }

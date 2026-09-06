@@ -114,7 +114,7 @@ test('hosted and helper processes receive purpose-specific environment allowlist
   // Docker itself is only ever invoked by the privileged Runtime Agent, which
   // still spawns it with the same sanitized environment.
   const agentDocker = read('runtime-agent/docker.js');
-  assert.match(agentDocker, /spawn\(bin, args,[\s\S]*env: \{ \.\.\.operatorEnvironment\(\)/);
+  assert.match(agentDocker, /spawn\(trustedTool\(bin\), args,[\s\S]*env: operatorEnvironment\(\)/);
   assert.match(integrations, /env:\s*operatorEnvironment\(\)/);
   assert.match(scanner, /env:\s*buildEnvironment\(\{ NODE_ENV: 'production' \}\)/);
   assert.doesNotMatch(integrations, /env:\s*process\.env/);
