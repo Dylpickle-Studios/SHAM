@@ -2,9 +2,9 @@
 
 SHAM includes four workflows:
 
-- `ci.yml`: syntax, regression tests, production dependency audit, release-readiness checks, and an amd64 Docker smoke build.
+- `ci.yml`: syntax, lint, type checks, unit and browser tests, production dependency audit, deployment/upgrade integration tests, and an amd64 Docker build with a mounted-volume restore smoke test.
 - `docker-publish.yml`: publishes multi-platform images to GitHub Container Registry on `main`, semantic-version tags, or manual dispatch.
-- `release.yml`: requires a committed lockfile, validates a `vX.Y.Z` tag, creates release archives and checksums, and creates the GitHub Release.
+- `release.yml`: requires a committed lockfile, validates a `vX.Y.Z` tag, creates release archives and checksums, and creates the GitHub Release using the matching changelog entry.
 - `prepare-lockfile.yml`: creates a pull request containing `package-lock.json` when the source archive was produced in an environment without npm registry access.
 
 ## 1. Create and configure the repository
@@ -15,7 +15,7 @@ SHAM includes four workflows:
 4. Under **Workflow permissions**, select **Read and write permissions**. The workflows also declare narrow job-level permissions.
 5. Keep **Allow GitHub Actions to create and approve pull requests** enabled only when you plan to use the manual lockfile workflow.
 6. Open **Settings → Actions → General → Fork pull request workflows** and retain the secure defaults; no repository secrets are required for ordinary pull-request CI.
-7. Protect `main` and require the `Test and audit` and `Docker smoke build` checks before merging.
+7. Protect `main` and require `Test and audit`, `Docker smoke build`, `Deployment and Compose integration`, and `Chromium critical workflows` before merging.
 
 ## 2. Commit the lockfile
 
@@ -40,8 +40,8 @@ Images are published as:
 ```text
 ghcr.io/<owner>/<repository>:edge          # main branch
 ghcr.io/<owner>/<repository>:<version>     # v<version> tag
-ghcr.io/<owner>/<repository>:1.1
-ghcr.io/<owner>/<repository>:1
+ghcr.io/<owner>/<repository>:<major>.<minor>
+ghcr.io/<owner>/<repository>:<major>
 ghcr.io/<owner>/<repository>:latest
 ```
 
@@ -74,13 +74,30 @@ SHAM_IMAGE=ghcr.io/<owner>/<repository>:<version> docker compose up -d
 
 ## 4. Create a release
 
-Confirm `package.json` contains the release version, the lockfile is committed, and CI is green. Then create and push the matching tag:
+Update the version in `package.json`, both root version fields in
+`package-lock.json`, `README.md`, and `docs/openapi.json`. Update the supported
+minor line in `SECURITY.md`, and move the unreleased changes into a dated
+`CHANGELOG.md` section. Include upgrade requirements: the matching changelog
+section becomes the public release notes.
+
+Set the previous stable upgrade baseline in both
+`test/integration/upgrade-recovery.integration.test.js` and `ci.yml`, and keep
+`docs/integration-testing.md` aligned. The 1.3.0 release uses the unmodified
+`v1.2.0` tag. Fetch that tag before running the required upgrade drill; missing
+tags or unavailable Docker must not count as release verification.
+
+Confirm all release changes and the lockfile are committed, the working tree
+is clean, and all four CI checks passed on the exact commit being tagged.
+The publishing workflows validate source independently; they do not wait for
+the browser, upgrade, or Docker smoke jobs. Then create and push the matching tag:
 
 ```bash
 git switch main
 git pull --ff-only
 npm run release:check
 npm audit --omit=dev --audit-level=high
+npm run test:e2e
+SHAM_REQUIRE_UPGRADE_BASELINE=1 SHAM_UPGRADE_FROM=v1.2.0 npm run test:integration
 git tag -s v<version> -m "SHAM <version>"
 git push origin v<version>
 ```
@@ -96,6 +113,15 @@ The tag triggers both container publishing and GitHub Release creation. The rele
 
 ## 5. Release verification
 
+- For 1.3.0, upgrade the control plane and Runtime Agent together. With Docker-backed sites, use both Compose files and the same pinned `SHAM_IMAGE` for both services:
+
+  ```bash
+  export SHAM_IMAGE=ghcr.io/<owner>/<repository>:<version>
+  docker compose -f docker-compose.yml -f docker-compose.isolation.yml pull
+  docker compose -f docker-compose.yml -f docker-compose.isolation.yml up -d
+  ```
+
+  Keep the existing `SHAM_DOCKER_HOST_DATA_PATH` and `DOCKER_GID` settings. Take a verified backup before upgrading and review the compatibility notes in `CHANGELOG.md`.
 - Confirm the GitHub Release is published and its version matches `package.json`.
 - Download the release archive and verify its checksum.
 - Pull `ghcr.io/<owner>/<repository>:<version>` on a clean host.

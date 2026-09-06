@@ -9,11 +9,11 @@ const Database = require('better-sqlite3');
 const { ShamHarness, ROOT, run, waitFor } = require('./harness');
 
 const enabled = process.env.SHAM_RUN_INTEGRATION === '1';
-// v1.1.2 is the stable predecessor to v1.2.0. Keeping the baseline explicit
+// v1.2.0 is the stable predecessor to v1.3.0. Keeping the baseline explicit
 // makes this a repeatable compatibility contract rather than an accidental
 // choice based on tag ordering. Set SHAM_UPGRADE_FROM when preparing a future
 // release line.
-const DEFAULT_UPGRADE_FROM = 'v1.1.2';
+const DEFAULT_UPGRADE_FROM = 'v1.2.0';
 
 async function supportedReleaseCheckout() {
   const checkout = await fs.mkdtemp(path.join(os.tmpdir(), 'sham-upgrade-baseline-'));

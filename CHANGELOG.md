@@ -4,6 +4,12 @@ All notable public changes to SHAM are documented here. The project follows Sema
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-09-06
+
+### Added
+
+- System Health panel with operational checks, including backup health.
+
 ### Changed
 
 - Runtime stdout/stderr is batched into bounded multi-line workspace events
@@ -19,6 +25,43 @@ All notable public changes to SHAM are documented here. The project follows Sema
   and prefills supported runtime/build settings before deployment.
 - Documented public-plus-VPN-only process listeners and a LinuxServer
   WireGuard deployment pattern for keeping the SHAM dashboard private.
+
+### Fixed
+
+- Backup restores now replace entries inside the mounted data directory,
+  preserving the mount, with a journal for interrupted-restore recovery.
+- Restores quiesce managed Docker workloads through the Runtime Agent before
+  replacing data. Agent credentials and local backup/update storage survive.
+- Backups preserve safe in-tree dependency links and executable permissions.
+  Creation and restore share archive validation, and restored SQLite databases
+  are checked before activation.
+- Backup health recognizes persisted success, running, and failure states.
+
+### Security
+
+- Workload variables are passed through private environment files instead of
+  altering the Runtime Agent's Docker/Compose CLI environment.
+- Docker and Compose reject host-backed or unmanaged named volumes; Compose
+  rejects reserved CLI environment variables and disables implicit repository
+  `.env` loading.
+- Hidden static assets are blocked before compression, minification, and SPA
+  fallback handling.
+- OIDC login state is bound to the initiating browser and consumed once.
+- Updated the locked `qs` dependency to 6.16.0 and added the pinned `tar`
+  parser for structured archive validation.
+
+### Upgrade notes
+
+- Upgrade the control plane and Runtime Agent together to 1.3.0. Restore
+  coordination requires the new agent operation.
+- Before upgrading, keep a verified backup and review Compose configurations:
+  use ordinary project-scoped local volumes without driver options, SHAM
+  environment settings instead of implicit `.env`, and no `DOCKER_*` or
+  `COMPOSE_*` workload variables. Multiline environment values remain unsupported.
+- Existing archives with unsafe paths, link targets, special files, or invalid
+  databases are rejected. If interrupted recovery cannot complete, preserve
+  `.restore-work` and follow the recovery instructions in
+  [Operations and security](docs/operations-and-security.md).
 
 ## [1.2.0] — 2026-08-31
 

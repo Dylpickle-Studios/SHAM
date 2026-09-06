@@ -16,6 +16,9 @@ const escapedVersion = pkg.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const supportedLine = `${pkg.version.split('.').slice(0, 2).join('.')}.x`;
 const nodeRequirement = pkg.engines?.node;
 requireCondition(/^\d+\.\d+\.\d+$/.test(pkg.version), 'package.json version must be a stable semantic version.');
+if (String(process.env.GITHUB_REF || '').startsWith('refs/tags/')) {
+  requireCondition(process.env.GITHUB_REF === `refs/tags/v${pkg.version}`, 'Release tag must match the stable package.json version.');
+}
 requireCondition(pkg.license === 'AGPL-3.0-or-later', 'package.json must declare AGPL-3.0-or-later.');
 requireCondition(pkg.private === true, 'The application package should remain private to prevent accidental npm publication.');
 

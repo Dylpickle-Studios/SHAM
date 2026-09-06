@@ -73,7 +73,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          node <<'NODE' > "$RUNNER_TEMP/sham-release-notes.md"
+          const fs = require('node:fs');
+          const version = require('./package.json').version;
+          const changelog = fs.readFileSync('CHANGELOG.md', 'utf8');
+          const section = changelog.split(/^## /m).find((entry) => entry.startsWith(`[${version}] — `));
+          if (!section) throw new Error(`Missing changelog entry for ${version}`);
+          const notes = section.slice(section.indexOf('\n') + 1).trim();
+          if (!notes) throw new Error(`Empty changelog entry for ${version}`);
+          const base = `https://github.com/${process.env.GITHUB_REPOSITORY}/blob/${process.env.GITHUB_REF_NAME}/`;
+          console.log(notes.replace(/\]\((docs\/[^)]+)\)/g, (_, target) => `](${base}${target})`));
+          NODE
           gh release create "$GITHUB_REF_NAME" dist/* \
             --title "SHAM ${GITHUB_REF_NAME#v}" \
-            --generate-notes \
+            --notes-file "$RUNNER_TEMP/sham-release-notes.md" \
             --verify-tag
