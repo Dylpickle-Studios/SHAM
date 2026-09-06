@@ -327,12 +327,31 @@ const PLUGIN_PLAYGROUND_DEFAULT_MANIFEST = {
   }
 };
 
+function renderPluginPlayground(html) {
+  const frame = $('#plugin-playground-frame');
+  frame.onload = () => {
+    frame.onload = null;
+    // The sandbox has an opaque origin, so targetOrigin must be '*'.
+    frame.contentWindow.postMessage({ type: 'sham-playground-render', html }, '*');
+  };
+  frame.removeAttribute('srcdoc');
+  frame.src = '/plugin-playground.html';
+}
+
+function playgroundThemeCss() {
+  const styles = getComputedStyle(document.documentElement);
+  const properties = ['--bg', '--bg-soft', '--panel-solid', '--panel-strong', '--line-strong', '--text', '--muted', '--primary', '--primary-soft', '--danger-text', '--radius'];
+  // Copy only theme tokens, never arbitrary stylesheet text, into the sandbox.
+  const declarations = properties.map(property => `${property}:${styles.getPropertyValue(property).trim()}`).join(';');
+  return `:root{${declarations};color-scheme:${styles.colorScheme}}`.replaceAll('<', '\\3c ');
+}
+
 function resetPluginPlayground() {
   $('#plugin-playground-manifest').value = JSON.stringify(PLUGIN_PLAYGROUND_DEFAULT_MANIFEST, null, 2);
   $('#plugin-playground-client').value = '';
   $('#plugin-playground-status').textContent = 'Edit the manifest, then validate or run a preview.';
   $('#plugin-playground-result').textContent = '';
-  $('#plugin-playground-frame').srcdoc = '<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;padding:2rem">Preview not running.</body>';
+  renderPluginPlayground(`<!doctype html><meta charset="utf-8"><style>${playgroundThemeCss()}body{margin:0;padding:1.2rem;font-family:system-ui;background:var(--bg);color:var(--muted)}</style><body>Preview not running.</body>`);
   state.pluginPlaygroundManifest = null;
 }
 
@@ -359,7 +378,8 @@ function playgroundSrcdoc(manifest, clientSource) {
   const source = String(clientSource || '').replace(/<\/script/gi, '<\\/script');
   const declarative = JSON.stringify({ id: manifest.id, name: manifest.name, type: manifest.type, ui: manifest.ui || {} }).replaceAll('<', '\\u003c');
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
-  :root{font-family:Inter,system-ui,sans-serif;color:#f7f2ff;background:#0c0717}*{box-sizing:border-box}body{margin:0;padding:18px;background:linear-gradient(135deg,#0c0717,#150c26);min-height:100vh}.shell{display:grid;gap:14px}.panel,.stat-card{border:1px solid rgba(220,197,255,.18);border-radius:14px;background:#1d1230;padding:14px}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}.stat-card{display:grid;gap:4px}.stat-card span,.muted{color:#ad9bc4;font-size:12px}.stat-card strong{font-size:22px}.nav{display:flex;gap:8px;flex-wrap:wrap}.nav button{border:1px solid rgba(220,197,255,.18);border-radius:9px;padding:8px 10px;background:#281842;color:#f7f2ff;cursor:pointer}.nav button.active{border-color:#a970ff;background:rgba(169,112,255,.16)}pre{white-space:pre-wrap;overflow-wrap:anywhere;color:#ffb3c3}.plugin-content{display:grid;gap:10px}</style></head><body><div id="root" class="shell"></div><script>
+  ${playgroundThemeCss()}
+  :root{font-family:Inter,system-ui,sans-serif;color:var(--text);background:var(--bg)}*{box-sizing:border-box;min-width:0;overflow-wrap:anywhere}body{margin:0;padding:18px;background:linear-gradient(135deg,var(--bg),var(--bg-soft)),var(--bg);min-height:100vh}.shell{display:grid;gap:14px}.panel,.stat-card{border:1px solid var(--line-strong);border-radius:var(--radius);background:var(--panel-solid);padding:14px}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:10px}.stat-card{display:grid;gap:4px}.stat-card span,.muted{color:var(--muted);font-size:12px}.stat-card strong{font-size:22px}.nav{display:flex;gap:8px;flex-wrap:wrap}.nav button{border:1px solid var(--line-strong);border-radius:9px;padding:8px 10px;background:var(--panel-strong);color:var(--text);cursor:pointer}.nav button.active{border-color:var(--primary);background:var(--primary-soft)}pre{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--danger-text)}.plugin-content{display:grid;gap:10px}</style></head><body><div id="root" class="shell"></div><script>
   const manifest=${manifestJson}; const fallback=${declarative}; const root=document.getElementById('root');
   function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
   function renderDefinition(def){
@@ -378,19 +398,21 @@ function playgroundSrcdoc(manifest, clientSource) {
 $('#plugin-playground-button').addEventListener('click', openPluginPlayground);
 $('#plugin-playground-reset').addEventListener('click', resetPluginPlayground);
 $('#plugin-playground-validate').addEventListener('click', async (event) => {
-  setBusy(event.currentTarget, true, 'Validating…');
+  const eventTarget = event.currentTarget;
+  setBusy(eventTarget, true, 'Validating…');
   try { await validatePluginPlaygroundManifest(); toast('Plugin manifest is valid.'); }
   catch (error) { state.pluginPlaygroundManifest = null; $('#plugin-playground-status').textContent = error.message; $('#plugin-playground-result').textContent = error.message; toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 $('#plugin-playground-run').addEventListener('click', async (event) => {
-  setBusy(event.currentTarget, true, 'Preparing…');
+  const eventTarget = event.currentTarget;
+  setBusy(eventTarget, true, 'Preparing…');
   try {
     const manifest = await validatePluginPlaygroundManifest();
-    $('#plugin-playground-frame').srcdoc = playgroundSrcdoc(manifest, $('#plugin-playground-client').value);
+    renderPluginPlayground(playgroundSrcdoc(manifest, $('#plugin-playground-client').value));
     $('#plugin-playground-status').textContent = 'Preview running in a sandboxed frame. Network access is disabled.';
   } catch (error) { $('#plugin-playground-status').textContent = error.message; toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 function selectDocumentationTab(tab, { focus = false } = {}) {

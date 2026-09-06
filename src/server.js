@@ -1098,6 +1098,14 @@ app.get('/LICENSE', (_req, res) => {
 });
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'API route not found.' }));
+// The playground gets an opaque sandbox and a separate policy. A srcdoc frame
+// inherits the dashboard CSP, which intentionally forbids inline plugin code.
+app.get('/plugin-playground.html', (_req, res) => {
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'none'; sandbox allow-scripts");
+  res.sendFile(path.join(publicDir, 'plugin-playground.html'));
+});
+
 app.use(express.static(publicDir, { index: 'index.html', maxAge: 0 }));
 app.use((req, res) => {
   if (!['GET', 'HEAD'].includes(req.method)) return res.status(404).type('text/plain').send('Not found');

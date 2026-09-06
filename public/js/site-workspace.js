@@ -28,7 +28,7 @@ function renderWorkspaceNetworking(site) {
 
 function renderWorkspaceSecurity(site) {
   const blocked = site.firewall?.blockedIps || [];
-  $('#site-workspace-security').innerHTML = `<div class="operations-grid"><article class="panel"><div class="panel-heading"><div><h2>Site firewall</h2><p class="muted">Use visitor intelligence on the Dashboard to add abusive scraper or LLM IPs here.</p></div><span class="badge">${site.firewall_enabled ? 'Enabled' : 'Disabled'}</span></div><div class="event-list">${blocked.length ? blocked.map((ip) => `<div class="event-item"><span class="event-icon">⊘</span><div><strong>${escapeHtml(ip)}</strong><p>Blocked locally</p></div><button class="button ghost" data-unban-ip="${escapeHtml(ip)}" type="button">Unban</button></div>`).join('') : '<div class="empty-state compact"><p>No IP addresses are blocked for this site.</p></div>'}</div></article><article class="panel"><h2>Security posture</h2><p>${site.domain_only ? 'Direct requests using other Host headers are rejected.' : 'Domain-only mode is disabled.'}</p><p>${site.security_preset === 'strict' ? 'Strict security headers are enabled.' : `Security header preset: ${escapeHtml(site.security_preset || 'balanced')}.`}</p><button class="button secondary" data-workspace-edit type="button">Edit security</button></article></div>`;
+  $('#site-workspace-security').innerHTML = `<div class="operations-grid"><article class="panel"><div class="panel-heading"><div><h2>Site firewall</h2><p class="muted">Use visitor intelligence on the Dashboard to add abusive scraper or LLM IPs here.</p></div><span class="badge">${site.firewall_enabled ? 'Enabled' : 'Disabled'}</span></div><div class="event-list">${blocked.length ? blocked.map((ip) => `<div class="event-item actionable"><span class="event-icon">⊘</span><div><strong>${escapeHtml(ip)}</strong><p>Blocked locally</p></div><button class="button ghost" data-unban-ip="${escapeHtml(ip)}" type="button">Unban</button></div>`).join('') : '<div class="empty-state compact"><p>No IP addresses are blocked for this site.</p></div>'}</div></article><article class="panel"><h2>Security posture</h2><p>${site.domain_only ? 'Direct requests using other Host headers are rejected.' : 'Domain-only mode is disabled.'}</p><p>${site.security_preset === 'strict' ? 'Strict security headers are enabled.' : `Security header preset: ${escapeHtml(site.security_preset || 'balanced')}.`}</p><button class="button secondary" data-workspace-edit type="button">Edit security</button></article></div>`;
 }
 
 function renderWorkspaceDeployments(deployments) {
@@ -154,12 +154,13 @@ $('#site-workspace-security').addEventListener('click', async (event) => {
   catch (error) { toast(error.message, 'error'); }
 });
 $('#workspace-deploy').addEventListener('click', async (event) => {
+  const eventTarget = event.currentTarget;
   const site = currentWorkspaceSite();
   if (!site?.git_url) return toast('Connect a Git repository in Site settings first.', 'warning');
-  setBusy(event.currentTarget, true, 'Deploying…');
+  setBusy(eventTarget, true, 'Deploying…');
   try { const result = await api(`/api/sites/${site.id}/deploy/git`, { method: 'POST', body: {} }); toast(result.warning || (result.webhook ? `Git deployment activated; ${result.webhook.provider} webhook ${result.webhook.action}.` : 'Git deployment activated.'), result.warning ? 'warning' : 'success'); await Promise.all([loadSites(), loadWorkspaceDeployments(site)]); }
   catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 $('#workspace-deployment-list').addEventListener('click', async (event) => {
   const site = currentWorkspaceSite();

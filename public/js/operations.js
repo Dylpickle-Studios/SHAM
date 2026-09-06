@@ -45,12 +45,13 @@ function addEnvironmentRow(variable = {}) {
   $('[data-env-scope]', row).value = variable.scope || 'runtime';
   $('[data-env-secret]', row).addEventListener('change', (event) => { $('[data-env-value]', row).type = event.target.checked ? 'password' : 'text'; });
   $('[data-env-reveal]', row)?.addEventListener('click', async (event) => {
+    const eventTarget = event.currentTarget;
     const site = operationsSite();
     const key = $('[data-env-key]', row).value.trim();
     if (!site || !key) return;
     const password = await requestAction({ title: `Reveal ${key}?`, message: 'Confirm your current password. The secret will be returned once and placed in this form field; anyone who can see your screen may read it.', confirmLabel: 'Reveal secret', inputLabel: 'Password', inputType: 'password', autocomplete: 'current-password' });
     if (!password) return;
-    setBusy(event.currentTarget, true, 'Revealing…');
+    setBusy(eventTarget, true, 'Revealing…');
     try {
       const result = await api(`/api/sites/${site.id}/environment/${encodeURIComponent(key)}/reveal`, { method: 'POST', body: { password } });
       const input = $('[data-env-value]', row);
@@ -68,7 +69,7 @@ function addEnvironmentRow(variable = {}) {
       input.select();
       toast(`${key} revealed temporarily. It will be masked again after 30 seconds or when you leave the field.`,'warning');
     } catch (error) { toast(error.message, 'error'); }
-    finally { setBusy(event.currentTarget, false); }
+    finally { setBusy(eventTarget, false); }
   });
   $('[data-remove-config-row]', row).addEventListener('click', () => row.remove());
   $('#environment-rows').append(row);
@@ -96,10 +97,10 @@ function renderOperationsSite(payload) {
   $('#export-site-config').href = `/api/sites/${site.id}/config/export`;
 
   const releases = payload.releases || [];
-  $('#release-list').innerHTML = releases.length ? releases.map((release) => `<div class="event-item"><div><strong>${escapeHtml(release.version)}</strong><span>${escapeHtml(release.source)} · ${escapeHtml(formatDate(release.createdAt))}${release.commitSha ? ` · ${escapeHtml(release.commitSha.slice(0, 12))}` : ''}</span></div>${release.active ? '<span class="badge success">Active</span>' : `<button class="button secondary" data-release-rollback="${release.id}" type="button">Roll back</button>`}</div>`).join('') : '<p class="muted">No atomic releases yet. The first Git deployment creates one.</p>';
+  $('#release-list').innerHTML = releases.length ? releases.map((release) => `<div class="event-item text-event"><div><strong>${escapeHtml(release.version)}</strong><span>${escapeHtml(release.source)} · ${escapeHtml(formatDate(release.createdAt))}${release.commitSha ? ` · ${escapeHtml(release.commitSha.slice(0, 12))}` : ''}</span></div>${release.active ? '<span class="badge success">Active</span>' : `<button class="button secondary" data-release-rollback="${release.id}" type="button">Roll back</button>`}</div>`).join('') : '<p class="muted">No atomic releases yet. The first Git deployment creates one.</p>';
 
   const previews = payload.previews || [];
-  $('#preview-list').innerHTML = previews.length ? previews.map((preview) => `<div class="event-item"><div><strong><a href="http://${escapeHtml(preview.hostname)}" target="_blank" rel="noopener">${escapeHtml(preview.hostname)}</a></strong><span>Expires ${escapeHtml(formatDate(preview.expiresAt))} · port ${preview.port}</span></div><button class="button danger" data-preview-delete="${preview.id}" type="button">Remove</button></div>`).join('') : '<p class="muted">No active previews.</p>';
+  $('#preview-list').innerHTML = previews.length ? previews.map((preview) => `<div class="event-item text-event"><div><strong><a href="http://${escapeHtml(preview.hostname)}" target="_blank" rel="noopener">${escapeHtml(preview.hostname)}</a></strong><span>Expires ${escapeHtml(formatDate(preview.expiresAt))} · port ${preview.port}</span></div><button class="button danger" data-preview-delete="${preview.id}" type="button">Remove</button></div>`).join('') : '<p class="muted">No active previews.</p>';
 
   $('#environment-rows').innerHTML = '';
   for (const variable of payload.environment || []) addEnvironmentRow(variable);
@@ -111,7 +112,7 @@ function renderOperationsSite(payload) {
     ? payload.databaseProfiles.map((profile) => `<label class="check-card"><input type="checkbox" value="${profile.id}" ${profile.attached ? 'checked' : ''}><span><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(profile.type)} → ${escapeHtml(profile.envKey)}</small></span></label>`).join('')
     : '<p class="muted">No instance database profiles are configured.</p>';
 
-  $('#job-list').innerHTML = (payload.jobs || []).length ? payload.jobs.map((job) => `<div class="event-item"><div><strong>${escapeHtml(job.name)}</strong><span><code>${escapeHtml(job.schedule)}</code> · next ${escapeHtml(formatDate(job.next_run_at))} · ${escapeHtml(job.last_status || 'never run')}</span><small>${escapeHtml(job.command)}</small></div><div class="inline-actions"><button class="button secondary" data-job-run="${job.id}" type="button" ${job.running ? 'disabled' : ''}>${job.running ? 'Running…' : 'Run now'}</button><button class="button ghost" data-job-edit="${job.id}" type="button">Edit</button><button class="button danger" data-job-delete="${job.id}" type="button">Delete</button></div></div>`).join('') : '<p class="muted">No scheduled tasks.</p>';
+  $('#job-list').innerHTML = (payload.jobs || []).length ? payload.jobs.map((job) => `<div class="event-item text-event"><div><strong>${escapeHtml(job.name)}</strong><span><code>${escapeHtml(job.schedule)}</code> · next ${escapeHtml(formatDate(job.next_run_at))} · ${escapeHtml(job.last_status || 'never run')}</span><small>${escapeHtml(job.command)}</small></div><div class="inline-actions"><button class="button secondary" data-job-run="${job.id}" type="button" ${job.running ? 'disabled' : ''}>${job.running ? 'Running…' : 'Run now'}</button><button class="button ghost" data-job-edit="${job.id}" type="button">Edit</button><button class="button danger" data-job-delete="${job.id}" type="button">Delete</button></div></div>`).join('') : '<p class="muted">No scheduled tasks.</p>';
   $('#job-list').dataset.jobs = JSON.stringify(payload.jobs || []);
 }
 
@@ -313,7 +314,7 @@ function renderOperationsInstance(payload) {
   $('#backup-clear-secrets').checked = false;
   updateBackupProviderFields();
   $('#backup-secret-status').textContent = (backup.secretFields || []).length ? `Stored encrypted credentials: ${(backup.secretFields || []).join(', ')}. Blank secret fields preserve the saved value.` : 'Credentials entered here are encrypted and are never returned by the API.';
-  $('#backup-list').innerHTML = (payload.backups || []).length ? payload.backups.slice(0, 12).map((backupRun) => `<div class="event-item actionable" data-backup-id="${backupRun.id}"><div><strong>${escapeHtml(backupRun.filename || 'Backup')}</strong><span>${escapeHtml(backupRun.destination)} · ${formatBytes(backupRun.bytes)} · ${escapeHtml(formatDate(backupRun.finishedAt || backupRun.startedAt))}</span>${backupRun.detail ? `<small>${escapeHtml(backupRun.detail)}</small>` : ''}</div><div class="inline-actions"><span class="badge ${backupRun.status === 'success' ? 'success' : backupRun.status === 'failed' ? 'error' : 'warning'}">${escapeHtml(backupRun.status)}</span>${backupRun.status === 'success' ? '<button class="button secondary" data-restore-backup type="button">Restore</button>' : ''}</div></div>`).join('') : '<p class="muted">No backup runs recorded.</p>';
+  $('#backup-list').innerHTML = (payload.backups || []).length ? payload.backups.slice(0, 12).map((backupRun) => `<div class="event-item actionable" data-backup-id="${backupRun.id}"><span class="event-icon" aria-hidden="true">↶</span><div><strong>${escapeHtml(backupRun.filename || 'Backup')}</strong><span>${escapeHtml(backupRun.destination)} · ${formatBytes(backupRun.bytes)} · ${escapeHtml(formatDate(backupRun.finishedAt || backupRun.startedAt))}</span>${backupRun.detail ? `<small>${escapeHtml(backupRun.detail)}</small>` : ''}</div><div class="inline-actions"><span class="badge ${backupRun.status === 'success' ? 'success' : backupRun.status === 'failed' ? 'error' : 'warning'}">${escapeHtml(backupRun.status)}</span>${backupRun.status === 'success' ? '<button class="button secondary" data-restore-backup type="button">Restore</button>' : ''}</div></div>`).join('') : '<p class="muted">No backup runs recorded.</p>';
 
   $('#prometheus-enabled').checked = Boolean(settings.prometheusEnabled);
   $('#prometheus-token').value = '';
@@ -336,9 +337,9 @@ function renderOperationsInstance(payload) {
   $('#instance-locale').value = settings.locale || 'en';
   $('#update-channel').value = settings.updateChannel || 'stable';
 
-  $('#alert-destination-list').innerHTML = (payload.alertDestinations || []).length ? payload.alertDestinations.map((destination) => `<div class="event-item"><div><strong>${escapeHtml(destination.name)}</strong><span>${escapeHtml(destination.kind)} · ${destination.enabled ? 'enabled' : 'disabled'}</span></div><div class="inline-actions"><button class="button secondary" data-alert-test="${destination.id}" type="button">Test</button><button class="button danger" data-alert-delete="${destination.id}" type="button">Delete</button></div></div>`).join('') : '<p class="muted">No alert destinations.</p>';
+  $('#alert-destination-list').innerHTML = (payload.alertDestinations || []).length ? payload.alertDestinations.map((destination) => `<div class="event-item text-event"><div><strong>${escapeHtml(destination.name)}</strong><span>${escapeHtml(destination.kind)} · ${destination.enabled ? 'enabled' : 'disabled'}</span></div><div class="inline-actions"><button class="button secondary" data-alert-test="${destination.id}" type="button">Test</button><button class="button danger" data-alert-delete="${destination.id}" type="button">Delete</button></div></div>`).join('') : '<p class="muted">No alert destinations.</p>';
 
-  $('#database-profile-list').innerHTML = (payload.databaseProfiles || []).length ? payload.databaseProfiles.map((profile) => `<div class="event-item"><div><strong>${escapeHtml(profile.name)}</strong><span>${escapeHtml(profile.type)} · ${escapeHtml(profile.envKey)}</span></div><button class="button danger" data-database-delete="${profile.id}" type="button">Delete</button></div>`).join('') : '<p class="muted">No database profiles.</p>';
+  $('#database-profile-list').innerHTML = (payload.databaseProfiles || []).length ? payload.databaseProfiles.map((profile) => `<div class="event-item text-event"><div><strong>${escapeHtml(profile.name)}</strong><span>${escapeHtml(profile.type)} · ${escapeHtml(profile.envKey)}</span></div><button class="button danger" data-database-delete="${profile.id}" type="button">Delete</button></div>`).join('') : '<p class="muted">No database profiles.</p>';
 
   const update = payload.update || {};
   const pending = update.pending || update.staged || null;
@@ -417,14 +418,15 @@ function gitProviderLabel(provider) {
 }
 
 $$('[data-git-provider-save]').forEach((button) => button.addEventListener('click', async (event) => {
-  const provider = event.currentTarget.dataset.gitProviderSave;
-  const row = event.currentTarget.closest('[data-git-provider-row]');
+  const eventTarget = event.currentTarget;
+  const provider = eventTarget.dataset.gitProviderSave;
+  const row = eventTarget.closest('[data-git-provider-row]');
   const input = $(`#git-provider-${provider}-token`);
   const base = $(`[data-git-provider-base="${provider}"]`, row);
   const token = input?.value.trim() || '';
   if (!token && !base) return toast(`Enter a ${gitProviderLabel(provider)} access token.`, 'error');
   if (base && !base.value.trim()) return toast(`Enter the ${gitProviderLabel(provider)} server URL.`, 'error');
-  setBusy(event.currentTarget, true, token ? 'Connecting…' : 'Saving…');
+  setBusy(eventTarget, true, token ? 'Connecting…' : 'Saving…');
   try {
     await api(`/api/admin/git-providers/${encodeURIComponent(provider)}`, {
       method: 'PUT',
@@ -434,26 +436,28 @@ $$('[data-git-provider-save]').forEach((button) => button.addEventListener('clic
     toast(token ? `${gitProviderLabel(provider)} connected.` : `${gitProviderLabel(provider)} server saved.`);
     await loadOperations();
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 }));
 $$('[data-git-provider-clear]').forEach((button) => button.addEventListener('click', async (event) => {
-  const provider = event.currentTarget.dataset.gitProviderClear;
-  setBusy(event.currentTarget, true, 'Disconnecting…');
+  const eventTarget = event.currentTarget;
+  const provider = eventTarget.dataset.gitProviderClear;
+  setBusy(eventTarget, true, 'Disconnecting…');
   try {
     await api(`/api/admin/git-providers/${encodeURIComponent(provider)}`, { method: 'PUT', body: { clearToken: true } });
     toast(`${gitProviderLabel(provider)} disconnected.`);
     await loadOperations();
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 }));
 $('#save-git-webhook-url').addEventListener('click', async (event) => {
-  setBusy(event.currentTarget, true, 'Saving…');
+  const eventTarget = event.currentTarget;
+  setBusy(eventTarget, true, 'Saving…');
   try {
     await api('/api/admin/operations/settings', { method: 'PUT', body: { gitWebhookBaseUrl: $('#git-webhook-base-url').value } });
     toast($('#git-webhook-base-url').value.trim() ? 'Public SHAM URL saved. Provider webhooks will be synchronized after Git deployments.' : 'Automatic provider webhook setup disabled.');
     await loadOperations();
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 $('#add-env-row').addEventListener('click', () => addEnvironmentRow());
 $('#paste-env').addEventListener('click', async () => {
@@ -468,16 +472,17 @@ $('#paste-env').addEventListener('click', async () => {
 });
 
 $('#copy-env').addEventListener('click', async (event) => {
+  const eventTarget = event.currentTarget;
   const site = operationsSite();
   const sourceSiteId = Number($('#copy-env-site').value || 0);
   if (!site || !sourceSiteId) return toast('Choose a source site first.', 'error');
-  setBusy(event.currentTarget, true, 'Copying…');
+  setBusy(eventTarget, true, 'Copying…');
   try {
     const result = await api(`/api/sites/${site.id}/environment/copy`, { method: 'POST', body: { sourceSiteId } });
     toast(`Copied ${result.copied} variable${result.copied === 1 ? '' : 's'} from ${result.source}.`);
     await loadOperations();
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 $('#environment-form').addEventListener('submit', async (event) => {
@@ -498,22 +503,24 @@ $('#environment-form').addEventListener('submit', async (event) => {
 });
 
 $('#save-site-databases').addEventListener('click', async (event) => {
+  const eventTarget = event.currentTarget;
   const site = operationsSite();
   if (!site) return;
-  setBusy(event.currentTarget, true, 'Saving…');
+  setBusy(eventTarget, true, 'Saving…');
   try {
     const profileIds = $$('#site-database-profiles input:checked').map((input) => Number(input.value));
     await api(`/api/sites/${site.id}/database-profiles`, { method: 'PUT', body: { profileIds } });
     toast('Database profile attachments saved.');
     await loadOperations();
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 $('#import-site-config').addEventListener('click', () => $('#import-site-config-file').click());
 $('#import-site-config-file').addEventListener('change', async (event) => {
+  const eventTarget = event.currentTarget;
   const site = operationsSite();
-  const file = event.currentTarget.files[0];
+  const file = eventTarget.files[0];
   if (!site || !file) return;
   try {
     if (file.size > 1024 * 1024) throw new Error('Configuration files are limited to 1 MB.');
@@ -522,7 +529,7 @@ $('#import-site-config-file').addEventListener('change', async (event) => {
     toast(result.warning || 'Configuration imported.', result.warning ? 'warning' : 'success');
     await Promise.all([loadSites(), loadOperations()]);
   } catch (error) { toast(error.message, 'error'); }
-  finally { event.currentTarget.value = ''; }
+  finally { eventTarget.value = ''; }
 });
 
 $('#git-deploy-form').addEventListener('submit', async (event) => {
@@ -555,14 +562,15 @@ $('#git-deploy-form').addEventListener('submit', async (event) => {
 });
 
 $('#create-preview').addEventListener('click', async (event) => {
+  const eventTarget = event.currentTarget;
   const site = operationsSite();
   if (!site) return;
   const hostname = await requestAction({ title: 'Create preview', message: 'Use a temporary hostname routed by the shared edge proxy.', confirmLabel: 'Create preview', inputLabel: 'Preview hostname', inputValue: site.preview_domain ? `preview-${site.id}.${site.preview_domain}` : `preview-${site.id}.${site.domain || 'local.invalid'}`, placeholder: 'preview.example.com' });
   if (!hostname) return;
-  setBusy(event.currentTarget, true, 'Creating…');
+  setBusy(eventTarget, true, 'Creating…');
   try { await api(`/api/sites/${site.id}/previews`, { method: 'POST', body: { hostname, ttlHours: 24 } }); toast('Preview created for 24 hours.'); await loadOperations(); }
   catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 $('#release-list').addEventListener('click', async (event) => {
@@ -639,7 +647,8 @@ $('#delete-log-filter').addEventListener('click', async () => {
 });
 
 $('#search-runtime-logs').addEventListener('click', async (event) => {
-  setBusy(event.currentTarget, true, 'Searching…');
+  const eventTarget = event.currentTarget;
+  setBusy(eventTarget, true, 'Searching…');
   try {
     const params = new URLSearchParams({ limit: '300' });
     const site = operationsSite();
@@ -648,9 +657,9 @@ $('#search-runtime-logs').addEventListener('click', async (event) => {
     if ($('#log-level').value) params.set('level', $('#log-level').value);
     if ($('#log-since').value) params.set('since', new Date($('#log-since').value).toISOString());
     const result = await api(`/api/runtime-logs/search?${params}`);
-    $('#operations-log-results').innerHTML = result.logs.length ? result.logs.map((log) => `<div class="event-item ${log.level === 'error' ? 'critical' : ''}"><div><strong>${escapeHtml(log.level)}</strong><span>${escapeHtml(formatDate(log.createdAt))}</span><small>${escapeHtml(log.message)}</small></div></div>`).join('') : '<p class="muted">No matching log records.</p>';
+    $('#operations-log-results').innerHTML = result.logs.length ? result.logs.map((log) => `<div class="event-item text-event ${log.level === 'error' ? 'critical' : ''}"><div><strong>${escapeHtml(log.level)}</strong><span>${escapeHtml(formatDate(log.createdAt))}</span><small>${escapeHtml(log.message)}</small></div></div>`).join('') : '<p class="muted">No matching log records.</p>';
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 
@@ -662,9 +671,10 @@ $('#site-clear-cloudflare-tunnel-token').addEventListener('change', (event) => {
 $('#site-cloudflare-connector-mode').addEventListener('change', updateSiteTunnelMode);
 
 $('#save-site-cloudflare-tunnel').addEventListener('click', async (event) => {
+  const eventTarget = event.currentTarget;
   const siteId = Number($('#site-id').value);
   if (!siteId) return;
-  setBusy(event.currentTarget, true, 'Saving…');
+  setBusy(eventTarget, true, 'Saving…');
   try {
     const enabled = $('#site-cloudflare-tunnel-enabled').checked;
     const clearToken = $('#site-clear-cloudflare-tunnel-token').checked;
@@ -689,7 +699,7 @@ $('#save-site-cloudflare-tunnel').addEventListener('click', async (event) => {
     toast('Site tunnel settings saved.');
     await loadSites();
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 $('#clear-shared-cloudflare-tunnel-token').addEventListener('change', (event) => {
@@ -698,7 +708,8 @@ $('#clear-shared-cloudflare-tunnel-token').addEventListener('change', (event) =>
 });
 
 $('#save-shared-cloudflare-tunnel').addEventListener('click', async (event) => {
-  setBusy(event.currentTarget, true, 'Saving…');
+  const eventTarget = event.currentTarget;
+  setBusy(eventTarget, true, 'Saving…');
   try {
     const enabled = $('#shared-cloudflare-tunnel-enabled').checked;
     const clearToken = $('#clear-shared-cloudflare-tunnel-token').checked;
@@ -713,18 +724,19 @@ $('#save-shared-cloudflare-tunnel').addEventListener('click', async (event) => {
     renderOperationsInstance(state.operations.instance);
     toast('Shared tunnel connector saved.');
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 $('#restart-shared-cloudflare-tunnel').addEventListener('click', async (event) => {
-  setBusy(event.currentTarget, true, 'Restarting…');
+  const eventTarget = event.currentTarget;
+  setBusy(eventTarget, true, 'Restarting…');
   try {
     const result = await api('/api/admin/cloudflare-tunnel/restart', { method: 'POST' });
     state.operations = { ...(state.operations || {}), instance: { ...(state.operations?.instance || {}), cloudflareTunnel: result.cloudflareTunnel } };
     renderOperationsInstance(state.operations.instance);
     toast('Shared tunnel connector restarted.');
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 $('#clear-pangolin-newt-secret').addEventListener('change', (event) => {
@@ -752,33 +764,36 @@ $('#pangolin-tunnel-form').addEventListener('submit', async (event) => {
 });
 
 $('#restart-pangolin-tunnel').addEventListener('click', async (event) => {
-  setBusy(event.currentTarget, true, 'Restarting…');
+  const eventTarget = event.currentTarget;
+  setBusy(eventTarget, true, 'Restarting…');
   try {
     const result = await api('/api/admin/pangolin-tunnel/restart', { method: 'POST' });
     state.operations = { ...(state.operations || {}), instance: { ...(state.operations?.instance || {}), pangolinTunnel: result.pangolinTunnel } };
     renderOperationsInstance(state.operations.instance);
     toast('Newt restarted.');
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 $('#restart-site-cloudflare-tunnel').addEventListener('click', async (event) => {
+  const eventTarget = event.currentTarget;
   const siteId = Number($('#site-id').value);
   if (!siteId) return;
-  setBusy(event.currentTarget, true, 'Restarting…');
+  setBusy(eventTarget, true, 'Restarting…');
   try {
     const result = await api(`/api/admin/sites/${siteId}/cloudflare-tunnel/restart`, { method: 'POST' });
     renderSiteCloudflareTunnel(result.cloudflareTunnel || {});
     toast('Site tunnel connector restarted.');
     await loadSites();
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 $('#provision-site-cloudflare-tunnel').addEventListener('click', async (event) => {
+  const eventTarget = event.currentTarget;
   const siteId = Number($('#site-id').value);
   if (!siteId) return;
-  setBusy(event.currentTarget, true, 'Provisioning…');
+  setBusy(eventTarget, true, 'Provisioning…');
   try {
     const result = await api(`/api/admin/sites/${siteId}/cloudflare-tunnel/provision`, {
       method: 'POST',
@@ -788,19 +803,20 @@ $('#provision-site-cloudflare-tunnel').addEventListener('click', async (event) =
     toast('Managed Cloudflare Tunnel provisioned and route reconciled.');
     await loadSites();
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 $('#reconcile-site-cloudflare-tunnel').addEventListener('click', async (event) => {
+  const eventTarget = event.currentTarget;
   const siteId = Number($('#site-id').value);
   if (!siteId) return;
-  setBusy(event.currentTarget, true, 'Reconciling…');
+  setBusy(eventTarget, true, 'Reconciling…');
   try {
     const result = await api(`/api/admin/sites/${siteId}/cloudflare-tunnel/reconcile`, { method: 'POST' });
     renderSiteCloudflareTunnel(result.cloudflareTunnel || {});
     toast('Cloudflare Tunnel route reconciled.');
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 $('#backup-provider').addEventListener('change', updateBackupProviderFields);
@@ -838,10 +854,11 @@ $('#backup-form').addEventListener('submit', async (event) => {
   finally { setBusy(button, false); }
 });
 $('#run-backup').addEventListener('click', async (event) => {
-  setBusy(event.currentTarget, true, 'Backing up…');
+  const eventTarget = event.currentTarget;
+  setBusy(eventTarget, true, 'Backing up…');
   try { await api('/api/admin/backups/run', { method: 'POST', body: { provider: $('#backup-provider').value } }); toast('Backup completed.'); await loadOperations(); }
   catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 $('#backup-list').addEventListener('click', async (event) => {
@@ -1006,12 +1023,13 @@ $('#cancel-update').addEventListener('click', async () => {
 $('#setup-open-security').addEventListener('click', () => { $('#setup-dialog').close(); showSection('security'); });
 $('#setup-open-operations').addEventListener('click', () => { $('#setup-dialog').close(); showSection('operations'); });
 $('#setup-finish').addEventListener('click', async (event) => {
-  setBusy(event.currentTarget, true, 'Saving…');
+  const eventTarget = event.currentTarget;
+  setBusy(eventTarget, true, 'Saving…');
   try {
     await api('/api/admin/operations/settings', { method: 'PUT', body: { setupCompleted: true } });
     state.bootstrap.setupCompleted = true;
     $('#setup-dialog').close();
     toast('Initial setup marked complete. The readiness checklist remains available under Operations.');
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });

@@ -544,9 +544,10 @@ $('#site-create-git-provider').addEventListener('change', () => {
   $('#site-create-git-repository').innerHTML = '<option value="">Choose a repository…</option>';
 });
 $('#site-browse-git-repositories').addEventListener('click', async (event) => {
+  const eventTarget = event.currentTarget;
   const provider = $('#site-create-git-provider').value;
   if (!provider) return toast('Choose a connected Git provider, or paste a repository URL manually.', 'error');
-  setBusy(event.currentTarget, true, 'Loading…');
+  setBusy(eventTarget, true, 'Loading…');
   try {
     const result = await api(`/api/admin/git-providers/${encodeURIComponent(provider)}/repositories`);
     state.gitRepositories = result.repositories || [];
@@ -555,7 +556,7 @@ $('#site-browse-git-repositories').addEventListener('click', async (event) => {
     $('#site-create-git-repository-row').hidden = false;
     if (!state.gitRepositories.length) toast('No repositories were returned for that provider.', 'warning');
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 $('#site-create-git-repository').addEventListener('change', () => {
   const repository = state.gitRepositories[Number($('#site-create-git-repository').value)];

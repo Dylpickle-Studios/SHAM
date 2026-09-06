@@ -458,7 +458,8 @@ $('#auth-form').addEventListener('submit', async (event) => {
 
 $('#auth-mfa-back').addEventListener('click', resetMfaLogin);
 $('#auth-passkey').addEventListener('click', async (event) => {
-  setBusy(event.currentTarget, true, 'Waiting…');
+  const eventTarget = event.currentTarget;
+  setBusy(eventTarget, true, 'Waiting…');
   $('#auth-error').textContent = '';
   try {
     if (!window.isSecureContext) throw new Error('Passkeys require HTTPS (or localhost). Enable SHAM_SELF_SIGNED_HTTPS for direct LAN access.');
@@ -470,7 +471,7 @@ $('#auth-passkey').addEventListener('click', async (event) => {
     resetMfaLogin();
     await enterDashboard();
   } catch (error) { $('#auth-error').textContent = error.name === 'NotAllowedError' ? 'Passkey verification was cancelled or timed out.' : error.message; }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 async function bootstrap() {

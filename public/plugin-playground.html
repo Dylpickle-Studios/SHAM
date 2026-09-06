@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Plugin preview</title></head>
+<body>
+<script>
+'use strict';
+// Only the embedding dashboard can supply the preview. The response CSP and
+// iframe sandbox keep plugin code away from the dashboard origin and network.
+window.addEventListener('message', (event) => {
+  if (window.parent === window || event.source !== window.parent
+      || event.data?.type !== 'sham-playground-render' || typeof event.data.html !== 'string') return;
+  document.open();
+  document.write(event.data.html);
+  document.close();
+}, { once: true });
+</script>
+</body>
+</html>

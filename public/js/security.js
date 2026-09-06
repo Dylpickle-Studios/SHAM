@@ -82,18 +82,19 @@ async function loadSecurity() {
 }
 $('#refresh-security').addEventListener('click', loadSecurity);
 $('#create-api-token').addEventListener('click', async (event) => {
+  const eventTarget = event.currentTarget;
   const name = await requestAction({ title: 'Create API token', message: 'Name this token for the machine or workflow that will use it.', confirmLabel: 'Continue', inputLabel: 'Token name', placeholder: 'Deployment CLI' });
   if (!name) return;
   const password = await requestSecurityPassword({ title: 'Confirm API token creation', message: 'Confirm your password. The new token will have read, logs, deployment, and site-control scopes.', confirmLabel: 'Create token' });
   if (!password) return;
-  setBusy(event.currentTarget, true, 'Creating…');
+  setBusy(eventTarget, true, 'Creating…');
   try {
     const result = await api('/api/security/api-tokens', { method: 'POST', body: { name, password, scopes: ['read', 'logs:read', 'deploy', 'sites:control'] } });
     $('#api-token-value').textContent = result.token;
     showModal($('#api-token-dialog'));
     await loadSecurity();
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 $('#api-token-list').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-delete-api-token]');
@@ -150,11 +151,12 @@ $('#copy-recovery-codes').addEventListener('click', async () => {
   catch { toast('Could not access the clipboard. Copy the codes manually.', 'warning'); }
 });
 $('#add-passkey').addEventListener('click', async (event) => {
+  const eventTarget = event.currentTarget;
   const name = await requestAction({ title: 'Add a passkey', message: 'Choose a recognizable name for this device or security key.', confirmLabel: 'Continue', inputLabel: 'Passkey name', placeholder: 'Laptop, phone, security key' });
   if (!name) return;
   const password = await requestSecurityPassword({ title: 'Confirm passkey enrollment', message: 'Confirm your current password before registering the new passkey.', confirmLabel: 'Register passkey' });
   if (!password) return;
-  setBusy(event.currentTarget, true, 'Waiting…');
+  setBusy(eventTarget, true, 'Waiting…');
   try {
     if (!navigator.credentials?.create) throw new Error('Passkeys require a supported browser and secure context.');
     const challenge = await api('/api/security/passkeys/options', { method: 'POST', body: { password } });
@@ -163,7 +165,7 @@ $('#add-passkey').addEventListener('click', async (event) => {
     toast('Passkey added.');
     await loadSecurity();
   } catch (error) { toast(error.name === 'NotAllowedError' ? 'Passkey creation was cancelled or timed out.' : error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 $('#passkey-list').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-delete-passkey]');
@@ -201,17 +203,18 @@ $('#password-change-form').addEventListener('submit', async (event) => {
 });
 
 $('#revoke-other-sessions').addEventListener('click', async (event) => {
+  const eventTarget = event.currentTarget;
   const password = hasLocalSecurityPassword()
     ? await requestSecurityPassword({ title: 'Sign out other sessions?', message: 'Confirm your password. Other browser sessions for this account will be invalidated immediately.', confirmLabel: 'Sign out other sessions', danger: true })
     : '';
   if (hasLocalSecurityPassword() && !password) return;
-  setBusy(event.currentTarget, true, 'Revoking…');
+  setBusy(eventTarget, true, 'Revoking…');
   try {
     const result = await api('/api/security/sessions/revoke-others', { method: 'POST', body: { password } });
     state.user = result.user;
     toast('Other browser sessions signed out.');
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 
 $('#recovery-dialog').addEventListener('close', () => { $('#recovery-codes').textContent = ''; });
@@ -295,16 +298,17 @@ $('#site-tools-dialog').addEventListener('close', () => {
   toolsSite = null;
 });
 $('#create-snapshot').addEventListener('click', async (event) => {
+  const eventTarget = event.currentTarget;
   const label = await requestAction({ title: 'Create snapshot', message: 'Choose a short label for this restore point.', confirmLabel: 'Create snapshot', inputLabel: 'Label', placeholder: 'Before deployment' });
   const site = toolsSite;
   if (!label || !site) return;
-  setBusy(event.currentTarget, true, 'Creating…');
+  setBusy(eventTarget, true, 'Creating…');
   try {
     await api(`/api/sites/${site.id}/snapshots`, { method: 'POST', body: { label } });
     if (toolsSite?.id === site.id) await loadSnapshots(site);
     toast(`Snapshot created for ${site.name}.`);
   } catch (error) { toast(error.message, 'error'); }
-  finally { setBusy(event.currentTarget, false); }
+  finally { setBusy(eventTarget, false); }
 });
 $('#snapshot-list').addEventListener('click', async (event) => {
   const item = event.target.closest('[data-snapshot-id]');
@@ -326,11 +330,12 @@ $('#snapshot-list').addEventListener('click', async (event) => {
   }
 });
 $('#run-dependency-scan').addEventListener('click', async (event) => {
+  const eventTarget = event.currentTarget;
   const site = toolsSite;
   if (!site) return;
   const sessionId = state.siteToolsRequest;
   const requestId = ++state.siteToolsDependencyRequest;
-  setBusy(event.currentTarget, true, 'Scanning…');
+  setBusy(eventTarget, true, 'Scanning…');
   try {
     const data = await api(`/api/sites/${site.id}/dependency-scan`, { method: 'POST' });
     if (!siteToolsRequestIsCurrent(site, sessionId) || requestId !== state.siteToolsDependencyRequest) return;
@@ -338,7 +343,7 @@ $('#run-dependency-scan').addEventListener('click', async (event) => {
     toast('Dependency scan completed.');
   } catch (error) {
     if (siteToolsRequestIsCurrent(site, sessionId) && requestId === state.siteToolsDependencyRequest) toast(error.message, 'error');
-  } finally { setBusy(event.currentTarget, false); }
+  } finally { setBusy(eventTarget, false); }
 });
 
 $('#security-settings-form').addEventListener('submit', async (event) => {

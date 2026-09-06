@@ -6,7 +6,7 @@ const { ShamHarness } = require('../integration/harness');
 let sham;
 const username = 'browser-admin';
 const password = 'browser-integration-password-123!';
-const siteName = 'browser-site';
+const siteName = 'browser-site-with-a-long-project-name';
 const siteDomain = 'browser.integration.test';
 
 test.describe.configure({ mode: 'serial' });
@@ -154,4 +154,60 @@ test('the site workspace and file browser remain usable on a phone viewport', as
   await expect(page.locator('#file-list .file-item').first()).toBeVisible();
   const viewport = await page.evaluate(() => ({ width: globalThis.innerWidth, documentWidth: globalThis.document.documentElement.scrollWidth }));
   expect(viewport.documentWidth).toBeLessThanOrEqual(viewport.width);
+});
+
+test('plugin preview and reset inherit the selected theme', async ({ page }) => {
+  await login(page);
+  await page.locator('[data-section="plugins"]').click();
+  for (const mode of ['light', 'dark']) {
+    await page.evaluate(mode => globalThis.SHAM_THEME.apply({ ...globalThis.SHAM_THEME.get(), name: 'emerald', mode }), mode);
+    await page.locator('#plugin-playground-button').click();
+    const expected = await page.evaluate(() => {
+      const probe = globalThis.document.createElement('div');
+      probe.style.background = 'var(--bg)';
+      globalThis.document.body.append(probe);
+      const color = globalThis.getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    });
+    const preview = page.frameLocator('#plugin-playground-frame');
+    await expect(preview.locator('body')).toHaveCSS('background-color', expected);
+    await page.locator('#plugin-playground-run').click();
+    await expect(page.locator('#plugin-playground-status')).toContainText('Preview running');
+    await expect(preview.locator('body')).toHaveCSS('background-color', expected);
+    await expect(preview.locator('.panel').first()).toBeVisible();
+    const isolation = await preview.locator('body').evaluate(async () => {
+      let parentBlocked = false;
+      let networkBlocked = false;
+      try { void globalThis.parent.document.body; } catch { parentBlocked = true; }
+      try { await globalThis.fetch('/api/bootstrap'); } catch { networkBlocked = true; }
+      return { parentBlocked, networkBlocked };
+    });
+    expect(isolation).toEqual({ parentBlocked: true, networkBlocked: true });
+    await page.locator('#plugin-playground-reset').click();
+    await expect(preview.locator('body')).toHaveText('Preview not running.');
+    await expect(preview.locator('body')).toHaveCSS('background-color', expected);
+    await page.locator('#plugin-playground-dialog [data-close-dialog]').first().click();
+  }
+});
+
+test('populated site cards and settings rows fit phones and split desktop panels', async ({ page }) => {
+  await login(page);
+  for (const width of [320, 768, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(() => globalThis.showSection('sites'));
+    const card = page.locator('.site-card').filter({ hasText: siteName });
+    await expect(card).toBeVisible();
+    expect(await card.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(2);
+    await page.evaluate(() => globalThis.showSection('operations'));
+    await page.evaluate(() => globalThis.addEnvironmentRow({ key: 'SAVED_SECRET', secret: true }));
+    for (const tab of ['delivery', 'configuration', 'automation', 'instance', 'administration']) {
+      await page.locator(`[data-operations-tab="${tab}"]`).click();
+      const overflow = await page.locator(`#operations-${tab}`).evaluate(root => [...root.querySelectorAll('*')]
+        .filter(element => element.checkVisibility() && element.clientWidth > 0)
+        .filter(element => globalThis.getComputedStyle(element).overflowX === 'visible' && element.scrollWidth > element.clientWidth + 3)
+        .map(element => element.id || element.className));
+      expect(overflow, `${width}px ${tab}`).toEqual([]);
+    }
+  }
 });
