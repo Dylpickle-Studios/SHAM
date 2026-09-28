@@ -100,6 +100,7 @@ Prefer external/container secret injection for production credentials.
 | `SHAM_SNAPSHOT_QUEUE_LIMIT` | `8` | Snapshot-operation queue bound. |
 | `SHAM_PLUGIN_ACTION_TIMEOUT_SECONDS` | `15` | Plugin startup/action timeout. |
 | `SHAM_PLUGIN_MAX_PENDING_ACTIONS` | `32` | Pending actions allowed per isolated plugin. |
+| `SHAM_PLUGIN_MEMORY_MB` | `64` | Heap limit for each enabled plugin's worker isolate. |
 
 ## Shared edge listener
 

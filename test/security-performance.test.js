@@ -134,3 +134,26 @@ test('all security, service, worker, and browser code is included in the recursi
   assert.match(checker, /const roots = \[path\.join\(root, 'src'\), path\.join\(root, 'public'\), path\.join\(root, 'runtime-agent'\)\]/);
   assert.match(checker, /if \(entry\.isDirectory\(\)\) collect\(absolute\)/);
 });
+
+test('performance history keeps compact samples while the latest sample keeps site detail', async () => {
+  const { db } = require('../src/db');
+  const { PerformanceMonitor } = require('../src/performance-monitor');
+  const manager = {
+    running: new Map([[1, { type: 'node', backend: { driver: 'process', child: null } }]]),
+    statusFor: () => ({}),
+    log: () => {}
+  };
+  const monitor = new PerformanceMonitor({ db, manager });
+  try {
+    await monitor.runSample();
+    await monitor.runSample();
+    const [older] = monitor.history();
+    assert.equal(older.sites, undefined);
+    assert.equal(typeof older.timestamp, 'string');
+    assert.equal(typeof older.memory.rssBytes, 'number');
+    assert.equal(monitor.current().sites.length, 1);
+    assert.ok(Array.isArray(monitor.activeAlertRows()));
+  } finally {
+    await monitor.stop();
+  }
+});

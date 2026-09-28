@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { Worker } = require('node:worker_threads');
-const { PLUGINS_DIR, PLUGIN_ACTION_TIMEOUT_MS, PLUGIN_MAX_PENDING_ACTIONS } = require('./config');
+const { PLUGINS_DIR, PLUGIN_ACTION_TIMEOUT_MS, PLUGIN_MAX_PENDING_ACTIONS, PLUGIN_MEMORY_MB } = require('./config');
 const { safeRelativePath } = require('./validation');
 const { extractPlugin } = require('./plugin-archive');
 const { encrypt, decrypt, isEncrypted } = require('./secret-store');
@@ -226,7 +226,10 @@ class WorkerPluginRuntime {
     this.stopping = false;
     this.failureNotified = false;
     this.worker = new Worker(path.join(__dirname, 'plugin-sandbox-worker.js'), {
-      workerData: { mainPath, manifest, settings: manager.settingsFor(row.id), maxPendingRpc: PLUGIN_MAX_PENDING_ACTIONS }
+      workerData: { mainPath, manifest, settings: manager.settingsFor(row.id), maxPendingRpc: PLUGIN_MAX_PENDING_ACTIONS },
+      // Every enabled plugin keeps its own V8 isolate alive; cap it so one plugin
+      // cannot grow without bound and idle plugins keep a small young generation.
+      resourceLimits: { maxOldGenerationSizeMb: PLUGIN_MEMORY_MB, maxYoungGenerationSizeMb: 8 }
     });
     const ready = new Promise((resolve, reject) => {
       this.readyResolve = resolve;

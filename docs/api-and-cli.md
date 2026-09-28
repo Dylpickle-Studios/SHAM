@@ -128,6 +128,8 @@ GET /api/sites/:id/alert-rules
 PUT /api/sites/:id/alert-rules
 ```
 
+`GET /api/performance` returns `current` (the latest full sample, including the per-site `sites` array), `history` (compact samples with `timestamp`, `cpuPercent`, `memory.rssBytes`, `memory.heapUsedBytes`, `eventLoopMs`, `eventLoopP99Ms`, and `runningSites`), and active `alerts`. Use `/api/sites/:id/performance/history` for persisted per-site history.
+
 ### Deployments
 
 ```http

@@ -158,8 +158,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
     const unhealthySiteRows = sites.filter((site) => site.enabled && (!site.running || site.healthStatus === 'unhealthy')).map((site) => ({
       id: site.id, name: site.name, runtimeType: site.runtime_type, running: site.running, healthStatus: site.healthStatus || (site.running ? 'starting' : 'stopped')
     }));
-    const performance = performanceMonitor.payload();
-    const alertRows = (performance.alerts || []).slice(0, 50);
+    const alertRows = performanceMonitor.activeAlertRows().slice(0, 50);
     const automatedTrafficRows = clientTypes.filter((row) => ['llm', 'search', 'crawler'].includes(row.type));
     res.json({
       totals: { ...totals, running: manager.running.size }, sites, daily, countries, visitors, clientTypes,

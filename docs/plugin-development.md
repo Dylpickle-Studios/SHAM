@@ -85,6 +85,8 @@ SHAM applies:
 - Lifecycle tracking during shutdown.
 - Optional worker isolation.
 
+Each enabled plugin keeps its own worker isolate running. Its heap is capped by `SHAM_PLUGIN_MEMORY_MB` (default 64 MB); a plugin that exceeds the cap is stopped and marked failed instead of growing the SHAM process without bound. Raise the limit only for plugins that genuinely need more memory.
+
 Worker threads share the same OS process authority. They are a fault-containment mechanism, not a hostile-code sandbox.
 
 ## Permissions

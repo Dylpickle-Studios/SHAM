@@ -4,6 +4,38 @@ All notable public changes to SHAM are documented here. The project follows Sema
 
 ## [Unreleased]
 
+### Added
+
+- `SHAM_PLUGIN_MEMORY_MB` caps the heap of each enabled plugin's worker
+  isolate (default 64 MB).
+
+### Changed
+
+- In-memory performance history keeps compact samples; only the latest sample
+  keeps the per-site breakdown. This removes memory growth proportional to
+  running sites and shrinks `/api/performance` responses substantially.
+  `history` entries no longer include `sites`, `disk`, `load`, `traffic`, or
+  `queues`; read those from `current`.
+- The dashboard stats view reads active alerts directly instead of building
+  the full performance payload.
+- The Performance page pauses polling while its browser tab is hidden.
+- Phone layouts: performance charts render at the device width with readable
+  labels, status badges no longer stretch across panels, empty-state
+  placeholders are shorter, and site templates, workspace details, theme
+  presets, and the color-mode switch use compact multi-column layouts.
+
+### Fixed
+
+- Resource-history chart time labels were always blank.
+- Health and readiness status-range inputs had no spacing between them.
+- Form fields in multi-column dialogs (for example the alert-rule dialog)
+  stretched to the height of a neighbouring field's hint text.
+- Modals reserved an empty scrollbar gutter, which made right padding uneven
+  and cut header/footer dividers short; sticky modal headers and footers are
+  now opaque so scrolled content no longer shows through.
+- Observability header actions now span the full width on phones like other
+  page headers.
+
 ## [1.3.0] — 2026-09-06
 
 ### Added

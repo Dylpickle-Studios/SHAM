@@ -105,7 +105,11 @@ class PerformanceMonitor {
     this.manager = manager;
     this.snapshotManager = snapshotManager;
     this.dependencyScanner = dependencyScanner;
+    // History keeps only the fields the charts use; the full per-site breakdown
+    // is retained for the latest sample alone so memory does not scale with
+    // (history length × running sites).
     this.samples = [];
+    this.latest = null;
     this.previousCpu = process.cpuUsage();
     this.previousTime = process.hrtime.bigint();
     this.previousSiteCounters = new Map();
@@ -307,7 +311,8 @@ class PerformanceMonitor {
       },
       sites
     };
-    this.samples.push(sample);
+    this.latest = sample;
+    this.samples.push({ timestamp: sample.timestamp, cpuPercent, memory: { rssBytes: memory.rss, heapUsedBytes: memory.heapUsed }, eventLoopMs, eventLoopP99Ms, runningSites: sample.runningSites });
     if (this.samples.length > PERFORMANCE_HISTORY_SAMPLES) this.samples.splice(0, this.samples.length - PERFORMANCE_HISTORY_SAMPLES);
     this.sampleCount += 1;
     try {
@@ -321,14 +326,19 @@ class PerformanceMonitor {
     return sample;
   }
 
-  current() { return this.samples[this.samples.length - 1] || null; }
+  current() { return this.latest; }
   history(limit = 120) { return this.samples.slice(-Math.min(Math.max(Number(limit) || 120, 1), PERFORMANCE_HISTORY_SAMPLES)); }
+
+  activeAlertRows() {
+    this.readActiveAlerts ||= this.db.prepare(`SELECT id, kind, severity, title, detail, site_id AS siteId, created_at AS createdAt, last_seen_at AS lastSeenAt FROM alerts WHERE acknowledged = 0 ORDER BY last_seen_at DESC LIMIT 100`);
+    return this.readActiveAlerts.all();
+  }
 
   payload() {
     return {
       current: this.current(),
       history: this.history(),
-      alerts: this.db.prepare(`SELECT id, kind, severity, title, detail, site_id AS siteId, created_at AS createdAt, last_seen_at AS lastSeenAt FROM alerts WHERE acknowledged = 0 ORDER BY last_seen_at DESC LIMIT 100`).all()
+      alerts: this.activeAlertRows()
     };
   }
 

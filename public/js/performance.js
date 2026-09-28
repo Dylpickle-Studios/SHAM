@@ -25,32 +25,46 @@ function chartLaneGeometry(values, maximum, yTop, laneHeight, xStart = 170, xEnd
 function renderMetricLanes(target, series, timestamps = []) {
   const svg = $(target);
   if (!svg) return;
+  // Lay out against the rendered width so labels keep a readable size on phones
+  // instead of shrinking with a fixed 900px coordinate space.
+  const renderedWidth = Math.round(svg.clientWidth || 0);
+  const compact = renderedWidth > 0 && renderedWidth < 560;
+  const width = compact ? renderedWidth : 900;
   const count = Math.max(...series.map((item) => item.values.length), 0);
   if (!count) {
-    svg.innerHTML = '<text x="450" y="150" text-anchor="middle" class="chart-empty">No performance samples yet.</text>';
+    svg.setAttribute('viewBox', `0 0 ${width} ${compact ? 160 : 300}`);
+    svg.innerHTML = `<text x="${width / 2}" y="${compact ? 80 : 150}" text-anchor="middle" class="chart-empty">No performance samples yet.</text>`;
     return;
   }
-  const laneHeight = 58;
-  const laneGap = 23;
-  const yStart = 16;
+  const laneHeight = compact ? 44 : 58;
+  const laneGap = compact ? 34 : 23;
+  const yStart = compact ? 26 : 16;
+  const xStart = compact ? 10 : 170;
+  const xEnd = compact ? width - 10 : 880;
   const rows = series.map((item, index) => {
     const yTop = yStart + index * (laneHeight + laneGap);
     const maximum = Math.max(1, Number(item.max || Math.max(...item.values, 1)));
     const latest = Number(item.values.at(-1) || 0);
-    const geometry = chartLaneGeometry(item.values, maximum, yTop, laneHeight);
+    const geometry = chartLaneGeometry(item.values, maximum, yTop, laneHeight, xStart, xEnd);
+    const labels = compact
+      ? `<text class="chart-series-label ${item.className}" x="${xStart - 4}" y="${yTop - 11}">${item.label} <tspan class="chart-series-value">${item.format(latest)}</tspan></text>
+      <text class="chart-series-max" x="${xEnd + 4}" y="${yTop - 11}" text-anchor="end">max ${item.format(maximum)}</text>`
+      : `<text class="chart-series-label ${item.className}" x="18" y="${yTop + 19}">${item.label}</text>
+      <text class="chart-series-value" x="18" y="${yTop + 41}">${item.format(latest)}</text>
+      <text class="chart-series-max" x="878" y="${yTop + 13}" text-anchor="end">max ${item.format(maximum)}</text>`;
     return `<g class="chart-lane-group ${item.className}">
-      <rect class="chart-lane" x="165" y="${yTop - 5}" width="720" height="${laneHeight + 10}" rx="10"/>
-      <line class="chart-lane-grid" x1="170" y1="${(yTop + laneHeight / 2).toFixed(1)}" x2="880" y2="${(yTop + laneHeight / 2).toFixed(1)}"/>
+      <rect class="chart-lane" x="${xStart - 5}" y="${yTop - 5}" width="${xEnd - xStart + 10}" height="${laneHeight + 10}" rx="10"/>
+      <line class="chart-lane-grid" x1="${xStart}" y1="${(yTop + laneHeight / 2).toFixed(1)}" x2="${xEnd}" y2="${(yTop + laneHeight / 2).toFixed(1)}"/>
       <path class="metric-area ${item.className}" d="${geometry.area}"/>
       <path class="metric-line ${item.className}" d="${geometry.line}"/>
-      <text class="chart-series-label ${item.className}" x="18" y="${yTop + 19}">${item.label}</text>
-      <text class="chart-series-value" x="18" y="${yTop + 41}">${item.format(latest)}</text>
-      <text class="chart-series-max" x="878" y="${yTop + 13}" text-anchor="end">max ${item.format(maximum)}</text>
+      ${labels}
     </g>`;
   }).join('');
+  const axisY = compact ? yStart + series.length * (laneHeight + laneGap) - laneGap + 22 : 286;
+  svg.setAttribute('viewBox', `0 0 ${width} ${compact ? axisY + 8 : 300}`);
   const startLabel = chartTimeLabel(timestamps[0]);
   const endLabel = chartTimeLabel(timestamps.at(-1));
-  svg.innerHTML = `${rows}<g class="chart-time-axis"><text x="170" y="286">${escapeHtml(startLabel)}</text><text x="880" y="286" text-anchor="end">${escapeHtml(endLabel)}</text></g>`;
+  svg.innerHTML = `${rows}<g class="chart-time-axis"><text x="${xStart}" y="${axisY}">${escapeHtml(startLabel)}</text><text x="${xEnd}" y="${axisY}" text-anchor="end">${escapeHtml(endLabel)}</text></g>`;
 }
 
 function renderPerformance(payload) {
@@ -75,7 +89,7 @@ function renderPerformance(payload) {
     { label: 'CPU', className: 'cpu', values: history.map((sample) => Number(sample.cpuPercent || 0)), max: 100, format: (value) => `${Number(value).toFixed(1)}%` },
     { label: 'Memory', className: 'memory', values: history.map((sample) => Number(sample.memory?.rssBytes || 0)), format: (value) => formatBytes(value) },
     { label: 'Event loop', className: 'loop', values: history.map((sample) => Number(sample.eventLoopP99Ms || 0)), format: (value) => `${Number(value).toFixed(0)} ms` }
-  ], history.map((sample) => sample.sampledAt || sample.sampled_at));
+  ], history.map((sample) => sample.timestamp || sample.sampledAt || sample.sampled_at));
 
   $('#performance-alerts').innerHTML = payload.alerts?.length ? payload.alerts.map((alert) => `<div class="event-item actionable ${escapeHtml(alert.severity)}" data-alert-id="${alert.id}"><span class="event-icon">${alert.severity === 'critical' ? '!' : '△'}</span><div><strong>${escapeHtml(alert.title)}</strong><p>${escapeHtml(alert.detail)}</p><small>${escapeHtml(formatDate(alert.lastSeenAt))}</small></div><button class="button ghost" data-ack-alert type="button">Acknowledge</button></div>`).join('') : '<div class="empty-state compact"><p>No active performance alerts.</p></div>';
   $('#performance-sites').innerHTML = (current.sites || []).map((site) => `<tr><td>${escapeHtml(site.name)}</td><td>${escapeHtml(site.runtimeType)} · ${escapeHtml(site.isolation || 'process')}${site.anubis ? ' · Anubis' : ''}${site.pid ? ` · PID ${site.pid}` : ''}</td><td>${Number(site.cpuPercent || 0).toFixed(1)}%</td><td>${Number(site.traffic?.requestsPerSecond || 0).toFixed(1)} req/s<br><small>${formatNumber(site.traffic?.requestDelta || 0)} sampled · ${formatBytes(site.traffic?.bytesPerSecond || 0)}/s</small></td><td>${Number(site.traffic?.p50ResponseMs || 0).toFixed(0)} ms p50<br><small>${Number(site.traffic?.p95ResponseMs || 0).toFixed(0)} ms p95 · ${Number(site.traffic?.averageResponseMs || 0).toFixed(0)} ms avg</small></td><td><span class="badge ${Number(site.traffic?.errorRate || 0) >= 25 ? 'error' : ''}">${Number(site.traffic?.errorRate || 0).toFixed(1)}%</span></td><td>${site.memory ? formatBytes(site.memory.rssBytes) : 'Unavailable'}${site.memoryLimitBytes ? ` / ${formatBytes(site.memoryLimitBytes)}` : ''}</td><td><span class="badge ${site.health?.status || ''}">${escapeHtml(site.health?.status || 'starting')}</span>${site.health?.latencyMs ? ` ${site.health.latencyMs} ms` : ''}</td><td>${formatNumber(site.connections)}</td><td>${formatNumber(site.restarts)}</td></tr>`).join('') || '<tr><td colspan="10" class="muted">No hosted runtime is currently running.</td></tr>';
@@ -120,7 +134,9 @@ function syncPerformanceSiteSelector(sites) {
   }
 }
 
+let lastSiteHistory = null;
 function renderSiteHistory(history) {
+  lastSiteHistory = history;
   const latencyMax = Math.max(1, ...history.map((row) => Number(row.p95ResponseMs || 0)), ...history.map((row) => Number(row.p50ResponseMs || 0)));
   renderMetricLanes('#performance-site-chart', [
     { label: 'CPU', className: 'cpu', values: history.map((row) => Number(row.cpuPercent || 0)), max: 100, format: (value) => `${Number(value).toFixed(1)}%` },
@@ -295,8 +311,23 @@ async function loadPerformance({ force = false } = {}) {
 function startPerformancePolling() {
   if (state.performanceTimer) return;
   loadPerformance();
-  state.performanceTimer = setInterval(() => { if (state.currentSection === 'performance') loadPerformance(); }, 5000);
+  state.performanceTimer = setInterval(() => { if (state.currentSection === 'performance' && !document.hidden) loadPerformance(); }, 5000);
 }
+let performanceResizeFrame = 0;
+let performanceChartWidth = 0;
+window.addEventListener('resize', () => {
+  cancelAnimationFrame(performanceResizeFrame);
+  performanceResizeFrame = requestAnimationFrame(() => {
+    const width = $('#performance-chart')?.clientWidth || 0;
+    if (state.currentSection !== 'performance' || !width || width === performanceChartWidth) return;
+    performanceChartWidth = width;
+    if (state.performance) renderPerformance(state.performance);
+    if (lastSiteHistory) renderSiteHistory(lastSiteHistory);
+  });
+});
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.performanceTimer && state.currentSection === 'performance') loadPerformance();
+});
 function stopPerformancePolling() {
   clearInterval(state.performanceTimer);
   state.performanceTimer = null;
