@@ -59,7 +59,7 @@ Per-site metrics include:
 
 Historical per-site samples are retained for seven days by the current implementation. Administrators can configure per-site alert thresholds.
 
-The resource-history chart covers the most recent in-memory samples (`SHAM_PERFORMANCE_HISTORY_SAMPLES`, one per `SHAM_PERFORMANCE_INTERVAL_SECONDS`). Only the latest sample carries the per-site breakdown shown in the hosted-runtimes table; older samples keep just the CPU, memory, and event-loop values the chart plots, so memory use does not grow with the number of running sites. Charts lay out against their rendered width, so labels stay readable on phones. The page stops polling while its browser tab is hidden and refreshes when the tab becomes visible again.
+The resource-history chart covers the most recent in-memory samples (`SHAM_PERFORMANCE_HISTORY_SAMPLES`, one per `SHAM_PERFORMANCE_INTERVAL_SECONDS`). Full samples, including the per-site breakdown, are kept only for the 120 most recent samples that the API serves; older samples keep just the CPU, memory, and event-loop values the chart plots, which keeps memory use low with many running sites. The dashboard requests compact history so each poll stays small. Charts lay out against their rendered width, so labels stay readable on phones. The page stops polling while its browser tab is hidden and refreshes when the tab becomes visible again.
 
 ## Settings organization
 

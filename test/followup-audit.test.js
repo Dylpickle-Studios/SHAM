@@ -87,7 +87,7 @@ test('ZIP dependency and upload diagnostics cover the reported failure modes', (
   const pkg = JSON.parse(read('package.json'));
   const upload = read('src/upload-utils.js');
   const app = read('public/app.js');
-  assert.equal(pkg.dependencies['adm-zip'], '0.6.0');
+  assert.equal(pkg.dependencies['adm-zip'], '0.6.1');
   assert.match(upload, /server-side temporary file disappeared before processing/);
   assert.match(upload, /valid, non-encrypted ZIP file/);
   assert.match(app, /function validatedArchive/);

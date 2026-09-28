@@ -170,7 +170,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
   app.get('/api/performance', requireAuth, async (req, res) => {
     try {
       if (bool(req.query.refresh, false)) await performanceMonitor.runSample();
-      res.json(performanceMonitor.payload());
+      res.json(performanceMonitor.payload({ compactHistory: bool(req.query.compactHistory, false) }));
     } catch (error) {
       res.status(503).json({ error: `Performance sample failed: ${error.message}` });
     }

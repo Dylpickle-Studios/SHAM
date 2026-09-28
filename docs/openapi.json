@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "SHAM Public API",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "description": "The stable, versioned SHAM automation API. Legacy /api routes remain compatibility aliases; new clients should use /api/v1. See docs/api-compatibility.md for support and deprecation policy."
   },
   "servers": [{ "url": "/api/v1", "description": "Current SHAM instance" }],
@@ -22,7 +22,7 @@
     "/sites/{siteId}/stop": { "post": { "tags": ["Operations"], "summary": "Stop site runtime", "security": [{ "bearerAuth": [] }, { "sessionCookie": [] }], "parameters": [{ "$ref": "#/components/parameters/SiteId" }], "responses": { "200": { "description": "Stopped" } } } },
     "/sites/{siteId}/restart": { "post": { "tags": ["Operations"], "summary": "Restart site runtime", "security": [{ "bearerAuth": [] }, { "sessionCookie": [] }], "parameters": [{ "$ref": "#/components/parameters/SiteId" }], "responses": { "200": { "description": "Restarted" } } } },
     "/runtime-logs": { "get": { "tags": ["Operations"], "summary": "Read runtime logs", "security": [{ "bearerAuth": [] }, { "sessionCookie": [] }], "parameters": [{ "name": "siteId", "in": "query", "schema": { "type": "integer" } }], "responses": { "200": { "description": "Runtime logs" } } } },
-    "/performance": { "get": { "tags": ["Operations"], "summary": "Read performance telemetry", "security": [{ "bearerAuth": [] }, { "sessionCookie": [] }], "responses": { "200": { "description": "Performance telemetry" } } } },
+    "/performance": { "get": { "tags": ["Operations"], "summary": "Read performance telemetry", "security": [{ "bearerAuth": [] }, { "sessionCookie": [] }], "parameters": [{ "name": "refresh", "in": "query", "description": "Take a fresh sample before responding.", "schema": { "type": "boolean" } }, { "name": "compactHistory", "in": "query", "description": "Return history entries with only timestamp, CPU, memory, event-loop, and running-site fields.", "schema": { "type": "boolean" } }], "responses": { "200": { "description": "Performance telemetry" } } } },
     "/admin/pangolin-tunnel": { "put": { "tags": ["Operations"], "summary": "Configure the supervised Pangolin Newt connector", "security": [{ "bearerAuth": [] }, { "sessionCookie": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PangolinTunnelInput" } } } }, "responses": { "200": { "description": "Connector configuration and runtime state" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" } } } },
     "/admin/pangolin-tunnel/restart": { "post": { "tags": ["Operations"], "summary": "Restart the supervised Pangolin Newt connector", "security": [{ "bearerAuth": [] }, { "sessionCookie": [] }], "responses": { "200": { "description": "Connector runtime state" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" } } } },
     "/admin/backups/run": { "post": { "tags": ["Backups"], "summary": "Create a verified backup", "security": [{ "bearerAuth": [] }, { "sessionCookie": [] }], "responses": { "200": { "description": "Backup metadata" }, "400": { "$ref": "#/components/responses/Error" } } } },

@@ -4,18 +4,22 @@ All notable public changes to SHAM are documented here. The project follows Sema
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-09-28
+
 ### Added
 
 - `SHAM_PLUGIN_MEMORY_MB` caps the heap of each enabled plugin's worker
   isolate (default 64 MB).
+- `GET /api/performance` (and `/api/v1/performance`) accepts
+  `compactHistory=1` to return history entries with only the charted fields.
 
 ### Changed
 
-- In-memory performance history keeps compact samples; only the latest sample
-  keeps the per-site breakdown. This removes memory growth proportional to
-  running sites and shrinks `/api/performance` responses substantially.
-  `history` entries no longer include `sites`, `disk`, `load`, `traffic`, or
-  `queues`; read those from `current`.
+- In-memory performance history keeps full samples only for the 120-sample
+  window the API serves and compacts older samples, reducing memory use that
+  previously grew with history length × running sites. The API response shape
+  is unchanged. The dashboard requests compact history, shrinking each
+  Performance poll from roughly 1.2 MB to 30 KB with 20 running sites.
 - The dashboard stats view reads active alerts directly instead of building
   the full performance payload.
 - The Performance page pauses polling while its browser tab is hidden.
@@ -35,6 +39,27 @@ All notable public changes to SHAM are documented here. The project follows Sema
   now opaque so scrolled content no longer shows through.
 - Observability header actions now span the full width on phones like other
   page headers.
+
+### Security
+
+- Updated `adm-zip` to 0.6.1 (GHSA-vwc7-r8mq-g2x9 symlink-following
+  extraction overwrite; GHSA-7q85-xj36-vmfc declared-size memory exhaustion).
+- Updated `multer` to 2.4.0 (GHSA-wc9g-mqfw-jrwm, GHSA-qfvm-cv95-jqjf,
+  GHSA-qvfw-j98x-7q72, GHSA-535w-7cp7-47q4: multipart denial-of-service and
+  file-size limit bypass). This restores the production dependency audit gate
+  used by CI and the Docker build.
+
+### Upgrade notes
+
+- Enabled plugins now run with a 64 MB worker heap limit. A plugin that needs
+  more memory is stopped and marked failed after upgrading; set
+  `SHAM_PLUGIN_MEMORY_MB` to a higher value before upgrading if you run
+  memory-heavy plugins.
+- No database migration or Runtime Agent protocol change is included. Upgrade
+  the control plane and Runtime Agent together with the same pinned
+  `SHAM_IMAGE`, as for 1.3.0, and take a verified backup first.
+- The upgrade compatibility drill now uses the unmodified `v1.3.0` public
+  stable release as its baseline.
 
 ## [1.3.0] — 2026-09-06
 

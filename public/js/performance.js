@@ -289,7 +289,7 @@ async function loadPerformance({ force = false } = {}) {
   if (button) button.disabled = true;
   const pending = (async () => {
     try {
-      const payload = await api(force ? '/api/performance?refresh=1' : '/api/performance', { signal: controller.signal });
+      const payload = await api(force ? '/api/performance?refresh=1&compactHistory=1' : '/api/performance?compactHistory=1', { signal: controller.signal });
       if (requestId === performanceRequestId) renderPerformance(payload);
       return payload;
     } catch (error) {

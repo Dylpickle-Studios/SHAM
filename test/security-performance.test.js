@@ -135,7 +135,7 @@ test('all security, service, worker, and browser code is included in the recursi
   assert.match(checker, /if \(entry\.isDirectory\(\)\) collect\(absolute\)/);
 });
 
-test('performance history keeps compact samples while the latest sample keeps site detail', async () => {
+test('performance history stays API-compatible while compacting samples outside the served window', async () => {
   const { db } = require('../src/db');
   const { PerformanceMonitor } = require('../src/performance-monitor');
   const manager = {
@@ -145,13 +145,15 @@ test('performance history keeps compact samples while the latest sample keeps si
   };
   const monitor = new PerformanceMonitor({ db, manager });
   try {
-    await monitor.runSample();
-    await monitor.runSample();
-    const [older] = monitor.history();
-    assert.equal(older.sites, undefined);
-    assert.equal(typeof older.timestamp, 'string');
-    assert.equal(typeof older.memory.rssBytes, 'number');
-    assert.equal(monitor.current().sites.length, 1);
+    for (let index = 0; index < 125; index += 1) await monitor.runSample();
+    const served = monitor.payload().history;
+    assert.equal(served.length, 120);
+    assert.ok(served.every((sample) => Array.isArray(sample.sites) && sample.disk && sample.queues));
+    assert.equal(monitor.samples[0].sites, undefined);
+    assert.equal(typeof monitor.samples[0].memory.rssBytes, 'number');
+    const compact = monitor.payload({ compactHistory: true });
+    assert.ok(compact.history.every((sample) => sample.sites === undefined && typeof sample.timestamp === 'string'));
+    assert.equal(compact.current.sites.length, 1);
     assert.ok(Array.isArray(monitor.activeAlertRows()));
   } finally {
     await monitor.stop();

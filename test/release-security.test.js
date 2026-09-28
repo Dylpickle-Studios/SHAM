@@ -24,7 +24,7 @@ test('release is AGPL-3.0-or-later and exposes the license from the interface', 
 test('multipart parsers pin the patched Multer release and disable field nesting', () => {
   const pkg = JSON.parse(read('package.json'));
   const server = read('src/server.js');
-  assert.equal(pkg.dependencies.multer, '2.2.0');
+  assert.equal(pkg.dependencies.multer, '2.4.0');
   assert.equal((server.match(/fieldNestingDepth:\s*0/g) || []).length, 3);
   const fieldLimit = Number(server.match(/const SITE_FORM_FIELD_LIMIT = (\d+);/)?.[1] || 0);
   assert.ok(fieldLimit >= 128 && fieldLimit <= 256, `site form field limit ${fieldLimit} must leave headroom without being unbounded`);
@@ -62,7 +62,7 @@ test('performance refresh requests a new sample and always restores the button',
   const app = read('public/app.js');
   const server = read('src/server.js');
   const monitor = read('src/performance-monitor.js');
-  assert.match(app, /force \? '\/api\/performance\?refresh=1' : '\/api\/performance'/);
+  assert.match(app, /force \? '\/api\/performance\?refresh=1&compactHistory=1' : '\/api\/performance\?compactHistory=1'/);
   assert.match(app, /performanceController\?\.abort\(\)/);
   assert.match(app, /button\.disabled = true/);
   assert.match(app, /finally[\s\S]*button\.disabled = false/);

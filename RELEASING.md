@@ -82,8 +82,8 @@ section becomes the public release notes.
 
 Set the previous stable upgrade baseline in both
 `test/integration/upgrade-recovery.integration.test.js` and `ci.yml`, and keep
-`docs/integration-testing.md` aligned. The 1.3.0 release uses the unmodified
-`v1.2.0` tag. Fetch that tag before running the required upgrade drill; missing
+`docs/integration-testing.md` aligned. The 1.4.0 release uses the unmodified
+`v1.3.0` tag. Fetch that tag before running the required upgrade drill; missing
 tags or unavailable Docker must not count as release verification.
 
 Confirm all release changes and the lockfile are committed, the working tree
@@ -97,7 +97,7 @@ git pull --ff-only
 npm run release:check
 npm audit --omit=dev --audit-level=high
 npm run test:e2e
-SHAM_REQUIRE_UPGRADE_BASELINE=1 SHAM_UPGRADE_FROM=v1.2.0 npm run test:integration
+SHAM_REQUIRE_UPGRADE_BASELINE=1 SHAM_UPGRADE_FROM=v1.3.0 npm run test:integration
 git tag -s v<version> -m "SHAM <version>"
 git push origin v<version>
 ```
@@ -113,7 +113,7 @@ The tag triggers both container publishing and GitHub Release creation. The rele
 
 ## 5. Release verification
 
-- For 1.3.0, upgrade the control plane and Runtime Agent together. With Docker-backed sites, use both Compose files and the same pinned `SHAM_IMAGE` for both services:
+- For 1.3.0 and later, upgrade the control plane and Runtime Agent together. With Docker-backed sites, use both Compose files and the same pinned `SHAM_IMAGE` for both services:
 
   ```bash
   export SHAM_IMAGE=ghcr.io/<owner>/<repository>:<version>

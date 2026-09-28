@@ -128,7 +128,7 @@ GET /api/sites/:id/alert-rules
 PUT /api/sites/:id/alert-rules
 ```
 
-`GET /api/performance` returns `current` (the latest full sample, including the per-site `sites` array), `history` (compact samples with `timestamp`, `cpuPercent`, `memory.rssBytes`, `memory.heapUsedBytes`, `eventLoopMs`, `eventLoopP99Ms`, and `runningSites`), and active `alerts`. Use `/api/sites/:id/performance/history` for persisted per-site history.
+`GET /api/performance` returns `current` (the latest sample, including the per-site `sites` array), `history` (the last 120 full samples), and active `alerts`. Add `refresh=1` to take a fresh sample first, or `compactHistory=1` to receive history entries with only `timestamp`, `cpuPercent`, `memory.rssBytes`, `memory.heapUsedBytes`, `eventLoopMs`, `eventLoopP99Ms`, and `runningSites` — the dashboard uses this to keep polling responses small. Use `/api/sites/:id/performance/history` for persisted per-site history.
 
 ### Deployments
 
