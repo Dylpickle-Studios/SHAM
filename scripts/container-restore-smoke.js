@@ -6,15 +6,18 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 
 const origin = `http://127.0.0.1:${process.env.SHAM_PORT || '8080'}`;
-const marker = path.join(process.env.SHAM_DATA_PATH || '/data', 'restore-smoke.txt');
+const dataDir = process.env.SHAM_DATA_PATH || '/data';
+const marker = path.join(dataDir, 'restore-smoke.txt');
 const expected = 'Recovered from the container data volume.';
 const password = 'ci-restore-only-password-123!';
 
 async function main() {
   if (process.argv[2] === 'stage') {
+    // First-run registration needs the setup token SHAM wrote to its data directory.
+    const setupToken = (await fs.readFile(path.join(dataDir, '.setup-token'), 'utf8')).trim();
     const registered = await fetch(`${origin}/api/auth/register`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ username: 'ci-restore-admin', password })
+      body: JSON.stringify({ username: 'ci-restore-admin', password, setupToken })
     });
     assert.equal(registered.status, 201);
     const cookie = String(registered.headers.get('set-cookie') || '').split(';')[0];
