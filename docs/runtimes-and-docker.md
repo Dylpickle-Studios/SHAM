@@ -176,18 +176,30 @@ Configure the SHAM Compose service as `app` and container port `3000`.
 
 ### Compose restrictions
 
-SHAM rejects common host/container escape or unmanaged-publication features, including:
+Compose policy is an **allowlist** applied to the normalized `docker compose config` model by both the control plane and the Runtime Agent. Any top-level, service, build, network, volume, config, or secret key SHAM does not recognize is rejected with an error naming the key (for example `uses unsupported Compose key "use_api_socket"`). Top-level `x-*` extension fields are allowed.
 
-- Privileged containers.
-- Host networking/PID/IPC namespaces.
-- Added Linux capabilities.
-- Devices.
-- Docker socket mounts.
-- Host bind mounts, including bind mounts disguised as named-volume driver options; use project-scoped local named volumes with no driver options instead.
-- Host-gateway mappings.
-- Disabled/unsafe security-profile settings covered by policy validation.
-- External/unmanaged networks, volumes, configs, or secrets.
-- Published host ports on supporting services.
+Explicitly rejected (when set to anything other than empty/false):
+
+- `privileged`, `cap_add`, `devices`, `device_cgroup_rules`, `cgroup`, `cgroup_parent`, `runtime`, `isolation`, `sysctls`, `userns_mode`, `oom_kill_disable`, `gpus`, `blkio_config`, `storage_opt`, `annotations`, realtime CPU options, `credential_spec`, `external_links`, `volumes_from`, `container_name`, and `network_mode`.
+- `pid`, `uts` other than unset; `ipc` other than `private`, `shareable`, or `none` (no `host`, `container:`, or `service:` namespace sharing).
+- `security_opt` entries other than `no-new-privileges` / `no-new-privileges:true`.
+- Logging drivers other than `json-file`, `local`, or `none`; `ulimits` other than `nofile`, `nproc`, `core`, `stack`; negative `oom_score_adj`; `deploy` device reservations.
+- Host bind mounts (including bind mounts disguised as named-volume driver options), `npipe`/`cluster` mounts, and Docker socket mounts; use project-scoped local named volumes with no driver options, or `tmpfs`.
+- Network drivers other than `bridge`, network driver/IPAM options, and external/unmanaged networks, volumes, configs, or secrets. Config/secret `environment:` sources are not supported.
+- Build `privileged`, `entitlements`, `ssh`, `cache_to`, `tags`, `isolation`, `ulimits`, host/custom build networks, `cache_from` entries that read host paths, remote (Git/HTTP) build contexts, and `additional_contexts` other than a project directory or `service:<project service>`.
+- `include:` and `extends: { file: ... }` (same-file `extends` is fine), because the files they pull in are not visible in the normalized model.
+- Host-gateway mappings and published host ports on supporting services.
+
+Every path the project references — build contexts, Dockerfiles, additional build contexts, every `env_file`, and config/secret `file:` sources — must resolve, **after following symlinks**, inside the site project. The Runtime Agent enforces this with `realpath`, so a symlink committed to the repository cannot point a build or env file at another site or the host.
+
+The Runtime Agent then runs exactly the model it validated: it writes the normalized project to a private `0600` file in its own temporary directory (inside the agent container in the isolation overlay, not the shared `/data` volume) and runs `up`/`ps`/`port`/`exec`/`down` with `-f` on that file, so editing the project tree after validation has no effect. In that model SHAM forces, on every service:
+
+- `cap_drop: [ALL]` plus `cap_add` of `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `FSETID`, `KILL`, `SETGID`, `SETUID`, `SETPCAP`, and `NET_BIND_SERVICE` (minus anything the service itself drops). This removes `MKNOD`, `NET_RAW`, `SETFCAP`, `SYS_CHROOT`, and `AUDIT_WRITE` from Docker's defaults; common images such as PostgreSQL and nginx keep working. Images that need `ping`/raw sockets, `chroot`, or file capabilities will not.
+- `security_opt: [no-new-privileges:true]`, so set-uid binaries such as `sudo`/`su` cannot gain privileges inside the container.
+- An `image:` on a service that `build:`s is renamed to Compose's project-scoped name (`<project>-<service>`), so a project can never retag a host image. Other services in the project that referenced the same tag are pointed at the renamed image and never pull it.
+- Config `file:` sources are inlined as config content, and service secrets are delivered as config content at the same `/run/secrets/<name>` target instead of host bind mounts (UTF-8 text up to 1 MiB). Build secrets are snapshotted into the agent's private directory.
+
+`develop:` (only used by `compose watch`) is accepted and dropped.
 
 The selected application service may receive the SHAM-managed loopback publication needed for routing when SHAM runs directly on the host. When SHAM itself is containerized, runtime networking uses the configured shared Docker network so the control plane does not incorrectly route to its own container-local `127.0.0.1`.
 
@@ -196,6 +208,10 @@ Workload environment values are passed through temporary private env files and d
 ### No-egress Compose/runtime networks
 
 When a site's outbound-network setting disallows internet access, SHAM can place managed Docker workloads on an internal Docker network. Configure `SHAM_DOCKER_INTERNAL_NETWORK` and the container isolation overlay appropriately.
+
+### Workloads cannot reach the dashboard or direct site listeners
+
+In the isolation overlay the `sham` container joins both runtime networks, so workloads could otherwise connect straight to `sham:8080` or a site's own listener port. SHAM asks the Runtime Agent for the subnets of the two configured runtime networks (`SHAM_DOCKER_INTERNAL_NETWORK`, `SHAM_DOCKER_EGRESS_NETWORK`) and answers `403` to any connection from those subnets on the dashboard, on per-site listeners, and on private listeners. Workloads that need another site must use its domain through the shared edge listener (ports 80/443), which applies that site's normal access rules. The subnet list refreshes after network creation and every five minutes; until it is first known (for example while the agent is unavailable), the check fails open. Do not place a dashboard reverse proxy on a runtime network.
 
 ## Docker-isolated legacy Node
 
@@ -296,7 +312,7 @@ Docker socket / Docker daemon
 
 This exists because the control plane is the internet-facing process (dashboard, deployment webhooks, uploads). If it were compromised while holding `/var/run/docker.sock`, an attacker would have effectively unrestricted host access. Moving that socket to a separate agent process means a control-plane compromise no longer implies direct Docker/root-level host access — the attacker is left with whatever the agent's narrow RPC surface allows (create/stop/remove SHAM-labeled containers, build SHAM-tagged images, and similar scoped operations), not arbitrary Docker or shell commands. Mounting the socket into the agent still grants substantial host authority; the agent is a privileged component and should be operated with the same care Docker socket access has always required.
 
-The agent exposes a small allowlisted set of typed operations (container run/stop/remove/port/logs/exec, image build/remove, network ensure/connect, Compose config/up/ps/port/down/exec, and SHAM-owned resource cleanup) over a local, token-authenticated Unix domain socket — never a generic `docker`/shell passthrough. Requests are authenticated with a randomly generated shared token (`SHAM_RUNTIME_AGENT_TOKEN_PATH`, mode `0600`), and mutating operations require the target container/Compose project to carry SHAM's own `sham.managed=true` (or `com.docker.compose.project=sham-...`) labels — the agent refuses to touch containers it did not create, even if the control plane asks it to.
+The agent exposes a small allowlisted set of typed operations (container run/stop/remove/port/logs/exec, image build/remove, network ensure/connect/subnets, Compose config/up/ps/port/down/exec, and SHAM-owned resource cleanup) over a local, token-authenticated Unix domain socket — never a generic `docker`/shell passthrough. Requests are authenticated with a randomly generated shared token (`SHAM_RUNTIME_AGENT_TOKEN_PATH`, mode `0600`), and mutating operations require the target container/Compose project to carry SHAM's own `sham.managed=true` (or `com.docker.compose.project=sham-...`) labels — the agent refuses to touch containers it did not create, even if the control plane asks it to.
 
 When the agent is unavailable (not started, wrong token, Docker daemon down), Docker-dependent features fail with a clear "Docker runtime unavailable" message instead of hanging; everything else in SHAM (static sites, process runtimes, Git, TLS, dashboard) keeps working normally. Capability flags (`GET /api/admin/operations` → `capabilities.agentReachable`/`agentAuthenticated`/`dockerAvailable`) report agent reachability, authentication status, and Docker daemon reachability without exposing the token or any host paths.
 

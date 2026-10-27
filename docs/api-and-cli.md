@@ -42,13 +42,13 @@ Available scopes:
 
 | Scope | Intended use |
 |---|---|
-| `read` | General read access supported by token middleware. |
-| `logs:read` | Runtime-log reads. |
-| `deploy` | Deployment/rollback automation covered by token authorization. |
-| `sites:control` | Start/stop/restart site runtimes. |
-| `*` | Unrestricted token scope; reserve for tightly controlled administration. |
+| `read` | `GET` requests other than the log, file-content, and export routes below. |
+| `logs:read` | Runtime logs and log search, runtime events, deployment logs, the audit log, and the log/audit exports. |
+| `deploy` | `POST /api/sites/:id/deploy/git` and `POST /api/sites/:id/releases/:releaseId/rollback` only. |
+| `sites:control` | `POST /api/sites/:id/start`, `/stop`, `/restart`, and `PATCH /api/sites/:id/toggle` only. |
+| `*` | Everything else, including every other write, site file contents (`GET /api/sites/:id/files/content`), site config export, and plugin actions. Reserve for tightly controlled administration. |
 
-Role checks still apply. A token cannot turn a non-administrator identity into an administrator.
+Scopes are bound to exact routes (the `/api/v1/` aliases resolve to the same routes). Any route not listed for a narrower scope requires `*`. Role checks still apply. A token cannot turn a non-administrator identity into an administrator.
 
 ## Stable automation examples
 

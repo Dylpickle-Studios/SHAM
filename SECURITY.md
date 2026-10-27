@@ -4,7 +4,7 @@
 
 | Version | Supported |
 | --- | --- |
-| 1.4.x (current release line) | Yes |
+| 1.5.x (current release line) | Yes |
 | Older releases | No |
 
 SHAM supports the current release line. Security fixes are made on the latest
@@ -27,6 +27,26 @@ Please avoid accessing data that is not yours, disrupting running systems, or pu
 ## Security expectations for deployments
 
 SHAM executes administrator-supplied Node.js applications and enabled JavaScript plugins as trusted code. Use a dedicated host or VM, run SHAM unprivileged, restrict mounted data and network access, protect the dashboard, and prefer Docker isolation for code that is not fully trusted.
+
+Only administrators can configure anything that makes SHAM execute code:
+process, Node, container and Compose runtimes, commands, Git sources,
+`sham.yaml` manifests, and files of sites that run code. Accounts with the
+`user` role are limited to static and proxy sites.
+
+Host process runtimes run as the same operating-system account as the control
+plane and can read its data directory, including the Runtime Agent token and
+the tunnel connector environment. Treat every host process site as able to act
+as SHAM itself. The Runtime Agent still bounds what that account can do with
+Docker: allowlisted operations, configured networks only, and hosted Compose
+restricted to an allowlisted, capability-reduced model.
+
+Backups do not contain the master keyring or JWT secret. Keep the exported
+recovery key offline and separate from backup storage.
+
+Plugin permissions are enforced. Plugin code runs in a context that exposes
+no host objects, and plugin SQL is limited to an allowlist of non-sensitive
+core tables plus the plugin's own tables. A worker isolate is still not a
+boundary for hostile code: install only plugins you have reviewed.
 
 In the recommended Docker-isolation deployment, the internet-facing SHAM
 control-plane container does **not** mount `/var/run/docker.sock`. A separate

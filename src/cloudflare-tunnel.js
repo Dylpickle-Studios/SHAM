@@ -25,6 +25,11 @@ const MAX_LOG_LENGTH = 24 * 1024;
 const DEFAULT_ORIGIN_CHECK_INTERVAL_MS = 30_000;
 const DEFAULT_AVAILABILITY_RECHECK_MS = 30_000;
 
+// PIDs of every live cloudflared child, across all managers. The edge only
+// trusts Cloudflare visitor headers on loopback connections these own.
+const supervisedPids = new Set();
+function supervisedCloudflaredPids() { return [...supervisedPids]; }
+
 function appendTail(current, text, limit = MAX_LOG_LENGTH) {
   const combined = `${current}${text}`;
   return combined.length > limit ? combined.slice(-limit) : combined;
@@ -462,7 +467,9 @@ class CloudflareTunnelManager {
     try {
       child = this.spawnProcess(
         this.command,
-        ['tunnel', '--no-autoupdate', 'run'],
+        // Bind the metrics/readiness server to loopback on a random port
+        // explicitly; never cloudflared's 0.0.0.0 default.
+        ['tunnel', '--no-autoupdate', '--metrics', '127.0.0.1:0', 'run'],
         processOptions({ env: this.environment({ TUNNEL_TOKEN: token }), stdio: ['ignore', 'pipe', 'pipe'] })
       );
     } catch (error) {
@@ -474,10 +481,13 @@ class CloudflareTunnelManager {
     }
 
     this.child = child;
+    const pid = child.pid;
+    if (pid) supervisedPids.add(pid);
     let settled = false;
     const finish = (code, signal, error = null) => {
       if (settled) return;
       settled = true;
+      if (pid) supervisedPids.delete(pid);
       this._handleExit({ child, generation, code, signal, error });
     };
     child.stdout?.on('data', (chunk) => this._consumeOutput('stdout', chunk, token, generation));
@@ -894,6 +904,7 @@ module.exports = {
   DatabaseTunnelSettingsStore,
   SiteCloudflareTunnelRegistry,
   commandAvailable,
+  supervisedCloudflaredPids,
   terminateAndWait,
   validateToken,
   validateTunnelId,

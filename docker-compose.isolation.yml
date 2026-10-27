@@ -19,6 +19,10 @@ services:
     environment:
       SHAM_DOCKER_INTERNAL_NETWORK: ${SHAM_DOCKER_INTERNAL_NETWORK:-sham-runtime-internal}
       SHAM_DOCKER_EGRESS_NETWORK: ${SHAM_DOCKER_EGRESS_NETWORK:-sham-runtime-egress}
+    # `sham` joins the runtime networks to reach workloads. It refuses
+    # connections *from* these networks to the dashboard and to direct site
+    # listeners (subnets come from the runtime agent); workloads reach other
+    # sites only by domain through the shared edge on 80/443.
     networks:
       - default
       - sham_runtime_internal

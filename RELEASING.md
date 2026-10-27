@@ -82,8 +82,8 @@ section becomes the public release notes.
 
 Set the previous stable upgrade baseline in both
 `test/integration/upgrade-recovery.integration.test.js` and `ci.yml`, and keep
-`docs/integration-testing.md` aligned. The 1.4.0 release uses the unmodified
-`v1.3.0` tag. Fetch that tag before running the required upgrade drill; missing
+`docs/integration-testing.md` aligned. The 1.5.0 release uses the unmodified
+`v1.4.0` tag. Fetch that tag before running the required upgrade drill; missing
 tags or unavailable Docker must not count as release verification.
 
 Confirm all release changes and the lockfile are committed, the working tree
@@ -97,7 +97,7 @@ git pull --ff-only
 npm run release:check
 npm audit --omit=dev --audit-level=high
 npm run test:e2e
-SHAM_REQUIRE_UPGRADE_BASELINE=1 SHAM_UPGRADE_FROM=v1.3.0 npm run test:integration
+SHAM_REQUIRE_UPGRADE_BASELINE=1 SHAM_UPGRADE_FROM=v1.4.0 npm run test:integration
 git tag -s v<version> -m "SHAM <version>"
 git push origin v<version>
 ```
@@ -110,6 +110,14 @@ git push origin v<version>
 ```
 
 The tag triggers both container publishing and GitHub Release creation. The release contains `.zip` and `.tar.gz` source archives plus SHA-256 checksum files. GitHub also provides its automatically generated source archives.
+
+### Signed in-app update archives
+
+Instances verify in-app update ZIPs (`sham-update.json`, `sham-update-signature-v1`, Ed25519) only against their **trusted update keys**, which are separate from plugin publisher keys. Publish the release signing public key with the release notes so operators can add it through `POST /api/admin/update-trusted-keys` before staging the update. Archives signed by any other key are treated as unsigned and need explicit acknowledgement.
+
+The archive version must be newer than the running version (semantic-versioning precedence, prereleases before releases); same-version and older archives need an explicit `allowDowngrade` acknowledgement.
+
+Upgrade note for releases that introduce the separate update trust store: earlier releases verified update archives against plugin trusted keys, and those keys are not migrated. Call this out in the release notes.
 
 ## 5. Release verification
 

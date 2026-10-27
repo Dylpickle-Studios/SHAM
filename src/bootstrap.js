@@ -35,9 +35,22 @@ function loadUpdateRuntime() {
   }
 }
 
+// Restore rules (which host state is preserved, how older archives are merged) ship with
+// the application, so an in-app update must not leave an older image's restorer in charge.
+function loadRestoreRuntime() {
+  const activeRoot = require('./update-manager').resolveActiveAppRoot();
+  if (path.resolve(activeRoot) === IMAGE_ROOT) return require('./backup-restore');
+  try {
+    return require(path.join(activeRoot, 'src', 'backup-restore.js'));
+  } catch (error) {
+    console.error(`Could not load the active restore runtime; falling back to the image bootstrap: ${error.message}`);
+    return require('./backup-restore');
+  }
+}
+
 (async () => {
   exposeImageDependencies();
-  const restored = await require('./backup-restore').applyPendingRestore();
+  const restored = await loadRestoreRuntime().applyPendingRestore();
   if (restored) console.log(`Restored SHAM data from ${restored.archivePath}.`);
   let applied = null;
   let updateRuntime = loadUpdateRuntime();

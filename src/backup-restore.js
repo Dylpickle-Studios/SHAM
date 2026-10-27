@@ -16,7 +16,12 @@ const MARKER = path.join(DATA_DIR, '.restore-pending.json');
 const FAILED_MARKER = path.join(DATA_DIR, '.restore-failed.json');
 const WORK_ROOT = path.join(DATA_DIR, '.restore-work');
 const JOURNAL = path.join(WORK_ROOT, 'journal.json');
-const PRESERVED = new Set(['backups', 'updates', 'runtime-agent', '.restore-work', '.restore-pending.json', '.restore-failed.json']);
+// Key material and the running application release belong to the host, not to a backup:
+// they are excluded from new archives and never replaced by a restore.
+const KEY_MATERIAL = ['.master-keyring.json', '.jwt-secret', '.setup-token'];
+const PRESERVED = new Set(['backups', 'updates', 'runtime-agent', 'app-runtime', ...KEY_MATERIAL, '.restore-work', '.restore-pending.json', '.restore-failed.json']);
+const BACKUP_EXCLUDED_TOP = new Set(['tmp', 'backups', 'updates', 'runtime-agent', 'app-runtime', 'sham.db', 'sham.db-wal', 'sham.db-shm', ...KEY_MATERIAL]);
+const MAX_BACKUP_ENTRIES = 250_000;
 
 function safeArchiveEntry(name) {
   const value = String(name || '').replace(/^\.\//, '');
@@ -47,11 +52,26 @@ async function verifyBackupArchive(archivePath) {
   } });
   if (invalid) throw new Error(invalid);
   if (!['File', 'OldFile'].includes(members.get('sham.db')?.type)) throw new Error('Backup archive does not contain a regular SHAM database snapshot.');
+  const problems = archiveLinkProblems(members, { stopOnFirst: true });
+  if (problems.length) throw new Error(problems[0].message);
+  return { archivePath: real, entries: members.size };
+}
+
+function unsafeLinkTarget(target) {
+  return !target || target.includes('\\') || target.includes('\0') || path.posix.isAbsolute(target) || /^[A-Za-z]:/.test(target);
+}
+
+// Shared by archive verification and backup creation so both agree exactly on which links are unsafe.
+function archiveLinkProblems(members, { stopOnFirst = false } = {}) {
+  const problems = [];
   const links = new Map();
   for (const [name, entry] of members) {
     if (!['SymbolicLink', 'Link'].includes(entry.type)) continue;
-    const target = String(entry.linkpath || '');
-    if (!target || target.includes('\\') || target.includes('\0') || path.posix.isAbsolute(target) || /^[A-Za-z]:/.test(target)) throw new Error(`Backup link ${name} has an unsafe target.`);
+    if (unsafeLinkTarget(String(entry.linkpath || ''))) {
+      problems.push({ name, message: `Backup link ${name} has an unsafe target.` });
+      if (stopOnFirst) return problems;
+      continue;
+    }
     links.set(name, entry);
   }
   const resolveLink = (name, visited = new Set()) => {
@@ -73,16 +93,60 @@ async function verifyBackupArchive(archivePath) {
     return resolved;
   };
   for (const [name, entry] of members) {
-    const parts = name.split('/');
-    for (let index = 1; index < parts.length; index += 1) {
-      if (links.has(parts.slice(0, index).join('/'))) throw new Error('Backup archive cannot write through a link.');
+    try {
+      const parts = name.split('/');
+      for (let index = 1; index < parts.length; index += 1) {
+        if (links.has(parts.slice(0, index).join('/'))) throw new Error('Backup archive cannot write through a link.');
+      }
+      if (!links.has(name)) continue;
+      const target = resolveLink(name).join('/');
+      if (entry.type === 'Link' && !['File', 'OldFile'].includes(members.get(target)?.type)) throw new Error('Backup hard links must reference a regular archive file.');
+    } catch (error) {
+      problems.push({ name, message: error.message });
+      if (stopOnFirst) return problems;
     }
-    if (!links.has(name)) continue;
-    const target = resolveLink(name).join('/');
-    if (entry.type === 'Link' && !['File', 'OldFile'].includes(members.get(target)?.type)) throw new Error('Backup hard links must reference a regular archive file.');
   }
-  return { archivePath: real, entries: members.size };
+  return problems;
+}
 
+/**
+ * Walks the data directory as tar would archive it (without following links) and
+ * returns `./`-prefixed member names that verifyBackupArchive would reject, so a
+ * hostile link planted by site code is skipped instead of failing every backup.
+ * @param {string} root
+ */
+async function findUnarchivableEntries(root) {
+  const members = new Map();
+  const skipped = [];
+  const stack = [''];
+  while (stack.length && members.size < MAX_BACKUP_ENTRIES) {
+    const relative = stack.pop();
+    let items;
+    try { items = await fs.promises.readdir(path.join(root, relative), { withFileTypes: true }); }
+    catch { continue; }
+    for (const item of items) {
+      if (!relative && (BACKUP_EXCLUDED_TOP.has(item.name) || item.name.startsWith('.restore-') || item.name.startsWith('.master-keyring.json'))) continue;
+      const name = relative ? `${relative}/${item.name}` : item.name;
+      if (name.includes('\\') || Buffer.byteLength(name) > 4000) { skipped.push(name); continue; }
+      if (item.isSymbolicLink()) {
+        const linkpath = await fs.promises.readlink(path.join(root, name)).catch(() => '');
+        members.set(name, { type: 'SymbolicLink', linkpath });
+      } else if (item.isDirectory()) {
+        members.set(name, { type: 'Directory' });
+        stack.push(name);
+      } else if (item.isFile()) members.set(name, { type: 'File' });
+      // Sockets are ignored by tar; FIFOs and devices would be rejected as special entries.
+      else if (!item.isSocket()) skipped.push(name);
+      if (members.size >= MAX_BACKUP_ENTRIES) break;
+    }
+  }
+  // Excluding one link can change how another resolves; repeat until no problem remains.
+  for (let round = 0; round < 8; round += 1) {
+    const problems = archiveLinkProblems(members);
+    if (!problems.length) break;
+    for (const { name } of problems) { members.delete(name); skipped.push(name); }
+  }
+  return [...new Set(skipped)].map((name) => `./${name}`);
 }
 
 async function stageBackupRestore(archivePath, metadata = {}) {
@@ -141,6 +205,18 @@ async function validateRestoreTree(root) {
   return entries;
 }
 
+const ARCHIVE_KEYRING = '.master-keyring.json';
+
+async function readStagedKeyring(stageRoot) {
+  const staged = path.join(stageRoot, ARCHIVE_KEYRING);
+  const stat = await fs.promises.lstat(staged).catch(() => null);
+  if (!stat) return null;
+  try {
+    if (!stat.isFile() || stat.size > 64 * 1024) throw new Error('Backup archive contains an invalid master keyring.');
+    return await fs.promises.readFile(staged, 'utf8');
+  } finally { await fs.promises.rm(staged, { force: true }); }
+}
+
 async function writeJournal(value) {
   const temporary = `${JOURNAL}.tmp`;
   const handle = await fs.promises.open(temporary, 'w', 0o600);
@@ -193,8 +269,15 @@ async function applyPendingRestore() {
     await fs.promises.rm(stageRoot, { recursive: true, force: true });
     await fs.promises.mkdir(stageRoot, { mode: 0o700 });
     await tar.x({ file: verified.archivePath, cwd: stageRoot, strict: true, preservePaths: false, preserveOwner: false, chmod: true,
-      filter: (name) => !PRESERVED.has(name.replace(/^\.\//, '').split('/')[0]) });
+      filter: (name, entry) => {
+        const member = name.replace(/^\.\//, '').replace(/\/$/, '');
+        // Archives from older releases carry the keyring their database was encrypted with.
+        if (member === ARCHIVE_KEYRING) return entry?.type === 'File' && Number(entry.size || 0) <= 64 * 1024;
+        return !PRESERVED.has(member.split('/')[0]);
+      } });
+    const archivedKeyring = await readStagedKeyring(stageRoot);
     const entries = await validateRestoreTree(stageRoot);
+    if (archivedKeyring !== null) require('./secret-store').mergeKeyringMaterial(archivedKeyring);
     await fs.promises.mkdir(rollbackRoot, { mode: 0o700 });
     const incoming = await fs.promises.readdir(stageRoot);
     const journal = { phase: 'moving', incoming, restored: [] };
@@ -222,4 +305,4 @@ async function applyPendingRestore() {
     if (!await fs.promises.stat(JOURNAL).catch(() => null)) await resumeRuntimeAgent();
   }
 }
-module.exports = { MARKER, FAILED_MARKER, safeArchiveEntry, verifyBackupArchive, stageBackupRestore, applyPendingRestore, recoverInterruptedRestore };
+module.exports = { MARKER, FAILED_MARKER, PRESERVED, KEY_MATERIAL, safeArchiveEntry, verifyBackupArchive, findUnarchivableEntries, stageBackupRestore, applyPendingRestore, recoverInterruptedRestore };

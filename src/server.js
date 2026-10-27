@@ -40,7 +40,10 @@ const {
   verifyPassword,
   issueToken,
   issueMfaToken,
+  readMfaToken,
   verifyMfaToken,
+  recordMfaFailure,
+  consumeMfaToken,
   setAuthCookie,
   clearAuthCookie,
   optionalAuth,
@@ -48,6 +51,10 @@ const {
   requireAdmin,
   sameOriginGuard,
   createRateLimiter,
+  createFailureLimiter,
+  ensureSetupToken,
+  verifySetupToken,
+  clearSetupToken,
   tokenHash,
   revokeCurrentSession,
   rotateSessionVersion
@@ -56,6 +63,7 @@ const { bool, validateSiteInput, safeRelativePath } = require('./validation');
 const { auditObfuscationCompatibility } = require('./obfuscation-audit');
 const { installUploadAsync, stopUploadWorkers, MAX_FILES } = require('./upload-utils');
 const { readManifest, manifestOverrides } = require('./runtime-spec');
+const { siteRoot } = require('./site-paths');
 const SITE_FORM_FIELD_LIMIT = 192;
 const { CappedDiskStorage, cleanupUploadedFiles } = require('./upload-storage');
 const {
@@ -79,7 +87,7 @@ const {
 } = require('./integrations');
 const { PluginManager } = require('./plugin-manager');
 const { getSecretSetting, setSecretSetting, rotateMasterKey } = require('./secret-store');
-const { generateTotpSetup, generateRecoveryCodes, verifyTotp, consumeRecoveryCode, enableTotp, disableTotp, userTotpSecret } = require('./mfa');
+const { generateTotpSetup, generateRecoveryCodes, matchTotpStep, consumeTotp, consumeRecoveryCode, enableTotp, disableTotp } = require('./mfa');
 const { registrationOptions, verifyRegistration, assertionOptions, verifyAssertion } = require('./webauthn');
 const { dashboardTlsOptions } = require('./dashboard-tls');
 const { SnapshotManager } = require('./snapshot-manager');
@@ -130,6 +138,7 @@ pluginManager.loadEnabled();
 
 app.set('trust proxy', TRUST_PROXY);
 app.disable('x-powered-by');
+app.use(require('./runtime/workload-networks').workloadNetworkGuard());
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -145,7 +154,8 @@ app.use((req, res, next) => {
 app.use(sameOriginGuard);
 app.use(express.json({
   limit: `${Math.max(EDITOR_LIMIT_BYTES + 1024 * 1024, 3 * 1024 * 1024)}b`,
-  verify: (req, _res, buffer) => { if (req.path.startsWith('/api/hooks/deploy/')) req.rawBody = Buffer.from(buffer); }
+  // Runs before the /api/v1 alias rewrite, so match both spellings of the route.
+  verify: (req, _res, buffer) => { if (/^\/api\/(?:v1\/)?hooks\/deploy\//.test(req.path)) req.rawBody = Buffer.from(buffer); }
 }));
 app.use(express.urlencoded({ extended: false, limit: '2mb' }));
 
@@ -177,6 +187,7 @@ app.use(apiV1Compatibility);
 const authLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 30 });
 const stepUpLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 20 });
 const webhookLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 120 });
+const accountFailures = createFailureLimiter({ windowMs: 15 * 60 * 1000, max: 10 });
 const upload = multer({
   storage: new CappedDiskStorage(UPLOAD_TMP_DIR, UPLOAD_LIMIT_BYTES),
   limits: {
@@ -318,6 +329,32 @@ function userCount() {
 
 function registrationEnabled() {
   return userCount() === 0;
+}
+
+if (userCount() === 0) ensureSetupToken();
+else clearSetupToken();
+
+// One-time upgrade step: non-admin file changes are refused while a site honours
+// sham.yaml. Static and proxy sites without a manifest gain nothing from that
+// setting (it defaulted on), so clear it instead of locking users out of them.
+if (getSetting('migration_static_manifest_v1', '0') !== '1') {
+  const candidates = db.prepare("SELECT * FROM sites WHERE manifest_enabled = 1 AND runtime_type IN ('static', 'proxy') AND COALESCE(runtime_isolation, '') != 'docker'").all();
+  const disable = db.prepare('UPDATE sites SET manifest_enabled = 0 WHERE id = ?');
+  for (const site of candidates) {
+    try { if (!readManifest(siteRoot(site))) disable.run(site.id); }
+    catch { /* An unreadable or invalid manifest is still a manifest: leave the site gated. */ }
+  }
+  setSetting('migration_static_manifest_v1', '1');
+}
+
+const failureSource = (req) => req.ip || req.socket.remoteAddress || '';
+
+function accountLocked(req, res, username) {
+  const retryAfter = accountFailures.retryAfter(username, failureSource(req));
+  if (!retryAfter) return false;
+  res.set('Retry-After', String(retryAfter));
+  res.status(429).json({ error: 'Too many failed sign-in attempts for this account. Try again later.' });
+  return true;
 }
 
 function securityUser(id) {
@@ -677,6 +714,7 @@ app.get('/api/bootstrap', optionalAuth, (req, res) => {
   const count = userCount();
   res.json({
     needsSetup: count === 0,
+    setupTokenRequired: count === 0,
     registrationEnabled: count === 0 || registrationEnabled(),
     authenticated: Boolean(req.user),
     user: publicUser(req.user ? securityUser(req.user.id) : null),
@@ -825,6 +863,7 @@ app.get(OIDC_CALLBACK_PATH, authLimiter, async (req, res) => {
 app.post('/api/auth/register', authLimiter, async (req, res) => {
   try {
     if (userCount() > 0) return res.status(403).json({ error: 'Public registration is disabled. Ask an administrator to create your account.' });
+    if (!verifySetupToken(req.body.setupToken)) return res.status(401).json({ error: 'The setup token is not valid. Copy it from the SHAM server log or the .setup-token file in the data directory.' });
     const username = normalizeUsername(req.body.username);
     const { salt, hash } = await hashPassword(req.body.password);
     const createUser = db.transaction(() => {
@@ -838,6 +877,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
       return db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid);
     });
     const user = createUser();
+    clearSetupToken();
     setAuthCookie(req, res, issueToken(user));
     recordAudit(user.id, 'auth.register', { role: user.role });
     res.status(201).json({ user: publicUser(user) });
@@ -849,6 +889,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
   const username = String(req.body.username || '').trim();
+  if (accountLocked(req, res, username)) return;
   const user = db.prepare(`SELECT users.*, (SELECT COUNT(*) FROM passkeys WHERE user_id = users.id) AS passkey_count FROM users WHERE username = ? COLLATE NOCASE`).get(username);
   const suppliedPassword = typeof req.body.password === 'string' && req.body.password.length <= 200 ? req.body.password : '';
   const valid = await verifyPassword(
@@ -856,7 +897,10 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     user?.password_salt || '00000000000000000000000000000000',
     user?.password_hash || '00'.repeat(64)
   );
-  if (!user || !user.active || !valid) return res.status(401).json({ error: 'Invalid username or password.' });
+  if (!user || !user.active || !valid) {
+    accountFailures.fail(username, failureSource(req));
+    return res.status(401).json({ error: 'Invalid username or password.' });
+  }
   const methods = [];
   if (user.totp_enabled) methods.push('totp', 'recovery');
   if (user.passkey_count > 0) methods.push('passkey');
@@ -864,17 +908,26 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     recordAudit(user.id, 'auth.password.accepted', { mfa: true });
     return res.json({ mfaRequired: true, mfaToken: issueMfaToken(user), methods, username: user.username });
   }
+  accountFailures.reset(username, failureSource(req));
   setAuthCookie(req, res, issueToken(user));
   recordAudit(user.id, 'auth.login');
   res.json({ user: publicUser(user) });
 });
 
 app.post('/api/auth/login/totp', authLimiter, (req, res) => {
-  const user = verifyMfaToken(req.body.mfaToken);
-  if (!user || !user.totp_enabled) return res.status(401).json({ error: 'The multi-factor login session expired.' });
+  const session = readMfaToken(req.body.mfaToken);
+  if (!session?.user.totp_enabled) return res.status(401).json({ error: 'The multi-factor login session expired.' });
+  const { user, jti } = session;
+  if (accountLocked(req, res, user.username)) return;
   const code = String(req.body.code || '');
-  const valid = verifyTotp(userTotpSecret(user), code) || consumeRecoveryCode(db, user.id, code);
-  if (!valid) return res.status(401).json({ error: 'The verification code is not valid.' });
+  const valid = consumeTotp(db, user, code) || consumeRecoveryCode(db, user.id, code);
+  if (!valid) {
+    recordMfaFailure(jti);
+    accountFailures.fail(user.username, failureSource(req));
+    return res.status(401).json({ error: 'The verification code is not valid.' });
+  }
+  consumeMfaToken(jti);
+  accountFailures.reset(user.username, failureSource(req));
   const hydrated = securityUser(user.id);
   setAuthCookie(req, res, issueToken(hydrated));
   recordAudit(user.id, 'auth.mfa.totp');
@@ -893,19 +946,25 @@ app.post('/api/auth/login/passkey/options', authLimiter, (req, res) => {
 });
 
 app.post('/api/auth/login/passkey/verify', authLimiter, (req, res) => {
+  const session = readMfaToken(req.body.mfaToken);
+  if (!session) return res.status(401).json({ error: 'The multi-factor login session expired.' });
+  const { user, jti } = session;
   try {
-    const user = verifyMfaToken(req.body.mfaToken);
-    if (!user) return res.status(401).json({ error: 'The multi-factor login session expired.' });
     const challenge = consumeChallenge(req.body.challengeId, user.id, 'login');
     const credential = db.prepare('SELECT * FROM passkeys WHERE user_id = ? AND credential_id = ?').get(user.id, String(req.body.credential?.id || ''));
     if (!credential) throw new Error('Passkey is not registered for this account.');
     const result = verifyAssertion({ response: req.body.credential, credential, challenge: challenge.challenge, rpId: challenge.rp_id, origins: [challenge.origin] });
+    consumeMfaToken(jti);
+    accountFailures.reset(user.username, failureSource(req));
     db.prepare('UPDATE passkeys SET sign_count = ?, last_used_at = CURRENT_TIMESTAMP WHERE id = ?').run(result.signCount, credential.id);
     const hydrated = securityUser(user.id);
     setAuthCookie(req, res, issueToken(hydrated));
     recordAudit(user.id, 'auth.mfa.passkey', { passkeyId: credential.id });
     res.json({ user: publicUser(hydrated) });
-  } catch (error) { res.status(400).json({ error: error.message }); }
+  } catch (error) {
+    recordMfaFailure(jti);
+    res.status(400).json({ error: error.message });
+  }
 });
 
 app.post('/api/auth/logout', optionalAuth, (req, res) => {
@@ -1012,9 +1071,11 @@ app.post('/api/security/totp/enable', requireAuth, (req, res) => {
   try {
     const challenge = consumeChallenge(req.body.setupId, req.user.id, 'totp-setup');
     const secret = require('./secret-store').decrypt(challenge.challenge);
-    if (!verifyTotp(secret, req.body.code)) throw new Error('The authenticator code did not match. Check the device clock and try again.');
+    const step = matchTotpStep(secret, req.body.code);
+    if (step === null) throw new Error('The authenticator code did not match. Check the device clock and try again.');
     const recoveryCodes = generateRecoveryCodes();
-    enableTotp(db, req.user.id, secret, recoveryCodes);
+    // Seed replay protection so the enrolment code cannot also complete a login.
+    enableTotp(db, req.user.id, secret, recoveryCodes, step);
     recordAudit(req.user.id, 'security.totp.enable');
     res.json({ user: publicUser(securityUser(req.user.id)), recoveryCodes });
   } catch (error) { res.status(400).json({ error: error.message }); }

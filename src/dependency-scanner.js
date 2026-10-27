@@ -8,7 +8,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { DEPENDENCY_SCAN_TIMEOUT_MS, DEPENDENCY_SCAN_WORKERS, DEPENDENCY_SCAN_QUEUE_LIMIT } = require('./config');
+const { DEPENDENCY_SCAN_TIMEOUT_MS, DEPENDENCY_SCAN_WORKERS, DEPENDENCY_SCAN_QUEUE_LIMIT, TMP_ROOT_DIR } = require('./config');
 const { siteRoot } = require('./site-paths');
 const { realFileInsideAsync } = require('./sites/shared');
 const { buildEnvironment } = require('./process-env');
@@ -32,6 +32,40 @@ function staticFindings(packageJson, hasLockfile) {
     if (scripts[name]) findings.push({ severity: 'info', code: 'install-script', message: `package.json defines a ${name} script. Review it before installing dependencies.` });
   }
   return findings;
+}
+
+// The registry is chosen by SHAM's operator, never by the scanned site: a site .npmrc
+// could otherwise redirect audit traffic (and any host credentials) to its own server.
+// The audit runs in a workspace holding no .npmrc, so npm sees only the operator's
+// environment and user/global config (corporate mirrors and proxies keep working).
+function auditRegistryArgs() {
+  const configured = String(process.env.NPM_CONFIG_REGISTRY || process.env.npm_config_registry || '').trim();
+  if (!configured) return [];
+  try {
+    const url = new URL(configured);
+    if (['http:', 'https:'].includes(url.protocol)) return ['--registry', url.href];
+  } catch { /* an invalid value falls back to the operator's npm config */ }
+  return [];
+}
+
+/**
+ * Copies only the manifest and lockfile into an empty directory so neither the site's
+ * .npmrc nor any other site file can influence npm.
+ */
+async function prepareAuditWorkspace(root, lockfile) {
+  await fs.promises.mkdir(TMP_ROOT_DIR, { recursive: true });
+  const workspace = await fs.promises.mkdtemp(path.join(TMP_ROOT_DIR, 'dependency-audit-'));
+  try {
+    for (const name of ['package.json', lockfile]) {
+      await fs.promises.copyFile(path.join(root, name), path.join(workspace, name), fs.constants.COPYFILE_EXCL);
+    }
+    // Empty user/global config files keep the SHAM host user's ~/.npmrc out of the audit as well
+    // (npm refuses to load one file as both).
+    return { workspace };
+  } catch (error) {
+    await fs.promises.rm(workspace, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 class DependencyScanner {
@@ -89,9 +123,13 @@ class DependencyScanner {
     let registryError = null;
     if (lockfile) {
       const command = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+      let workspace = null;
       try {
+        const prepared = await prepareAuditWorkspace(root, lockfile);
+        workspace = prepared.workspace;
+        const args = ['audit', '--json', '--omit=dev', '--package-lock-only', ...auditRegistryArgs()];
         audit = await new Promise((resolve, reject) => {
-          const child = spawn(command, ['audit', '--json', '--omit=dev', '--package-lock-only'], { cwd: root, env: buildEnvironment({ NODE_ENV: 'production' }), stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+          const child = spawn(command, args, { cwd: workspace, env: buildEnvironment({ NODE_ENV: 'production' }), stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
           this.children.add(child);
           let stdout = '';
           let stderr = '';
@@ -120,6 +158,7 @@ class DependencyScanner {
           });
         });
       } catch (error) { registryError = error.message; }
+      finally { if (workspace) await fs.promises.rm(workspace, { recursive: true, force: true }).catch(() => {}); }
     }
 
     const vulnerabilities = audit?.report?.metadata?.vulnerabilities || {};
@@ -175,4 +214,4 @@ class DependencyScanner {
   }
 }
 
-module.exports = { DependencyScanner, staticFindings };
+module.exports = { DependencyScanner, staticFindings, auditRegistryArgs, prepareAuditWorkspace };

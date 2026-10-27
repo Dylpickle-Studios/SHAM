@@ -7,6 +7,7 @@ const { spawn } = require('node:child_process');
 const { operatorEnvironment } = require('../src/process-env');
 const { DOCKER_BIN, PACK_BIN, NIXPACKS_BIN, DOCKER_INTERNAL_NETWORK, DOCKER_EGRESS_NETWORK, ANUBIS_IMAGE, DATA_DIR } = require('../src/config');
 const { composeRuntimePolicy, validateComposeProjectPaths } = require('../src/sites/runtime');
+const { assertNoExternalComposeSources, assertComposeRealPaths, writeHardenedComposeProject } = require('./compose');
 const {
   ValidationError, assertContainerName, assertComposeProject, assertImageTag, assertManagedImageTag,
   assertNetworkName, assertEnv, assertCommandString, assertPathInsideRoot, assertPort, assertPositiveInt
@@ -184,19 +185,63 @@ async function fetchAndValidateComposeConfig({ files, cwd, env, service, contain
   const validatedFiles = validateComposeFiles(files);
   const root = projectRoot(cwd);
   validateComposeService(service);
-  const result = await runTool(DOCKER_BIN, ['compose', ...(project ? ['-p', project] : []), ...composeFileArgs(validatedFiles), 'config', '--format', 'json'], { cwd: root, env, timeoutMs: 30_000, maxOutputBytes: 2 * 1024 * 1024, rejectOutputOverflow: true });
-  let config;
-  try { config = JSON.parse(result.stdout); } catch { throw new Error('Docker Compose did not return a valid normalized configuration.'); }
+  for (const file of validatedFiles) assertNoExternalComposeSources(await fs.promises.readFile(file, 'utf8'), `Compose file ${path.basename(file)}`);
+  const configArgs = ['compose', ...(project ? ['-p', project] : []), ...composeFileArgs(validatedFiles), 'config', '--format', 'json'];
+  const options = { cwd: root, env, timeoutMs: 30_000, maxOutputBytes: 2 * 1024 * 1024, rejectOutputOverflow: true };
+  const parse = (result) => { try { return JSON.parse(result.stdout); } catch { throw new Error('Docker Compose did not return a valid normalized configuration.'); } };
+  const config = parse(await runTool(DOCKER_BIN, configArgs, options));
+  // Normalization inlines env_file contents and drops the key; the
+  // uninterpolated model still names every env_file Compose actually read.
+  const uninterpolated = parse(await runTool(DOCKER_BIN, [...configArgs, '--no-interpolate'], options));
+  let resolved;
   try {
     validateComposeProjectPaths(config, root);
     composeRuntimePolicy(config, service, { containerPort, requirePublishedPort: false });
+    const envFiles = { services: Object.fromEntries(Object.entries(uninterpolated?.services || {}).map(([name, definition]) => [name, { env_file: definition?.env_file }])) };
+    resolved = new Map([...assertComposeRealPaths(config, root), ...assertComposeRealPaths(envFiles, root)]);
   } catch (error) {
     // Compose policy/path violations are invalid caller input, not an agent
     // failure. Preserve that distinction through the RPC boundary so the
     // control plane can reject an unsafe deployment before `compose up`.
     throw new ValidationError(error instanceof Error ? error.message : String(error));
   }
-  return { config, root, validatedFiles };
+  return { config, root, validatedFiles, resolved };
+}
+
+// Projects started by this agent run from the hardened model written at `up`
+// time. Later ps/port/exec/down calls reuse it so the project files are never
+// re-read after validation.
+/** @type {Map<string, { directory: string, file: string, projectDirectory: string, root: string }>} */
+const composeProjects = new Map();
+
+async function forgetComposeProject(project) {
+  const entry = composeProjects.get(project);
+  composeProjects.delete(project);
+  if (entry) await fs.promises.rm(entry.directory, { recursive: true, force: true }).catch(() => {});
+}
+
+async function prepareComposeProject({ project, files, cwd, env, service, containerPort }) {
+  const { config, root, validatedFiles, resolved } = await fetchAndValidateComposeConfig({ files, cwd, env, service, containerPort, project });
+  let written;
+  try { written = await writeHardenedComposeProject(config, { root, resolved }); }
+  catch (error) {
+    if (error instanceof ValidationError) throw error;
+    throw new ValidationError(`Compose project could not be prepared: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  await forgetComposeProject(project);
+  const entry = { directory: written.directory, file: written.file, projectDirectory: path.dirname(validatedFiles[0]), root };
+  composeProjects.set(project, entry);
+  return entry;
+}
+
+async function composeProjectFor(params) {
+  const projectName = assertComposeProject(params.project, 'Compose project');
+  validateComposeService(params.service);
+  return { projectName, entry: composeProjects.get(projectName) || await prepareComposeProject({ ...params, project: projectName }) };
+}
+
+function hardenedComposeArgs(projectName, entry) {
+  return ['compose', '-p', projectName, '--project-directory', entry.projectDirectory, '-f', entry.file];
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +300,7 @@ async function containersRun(params) {
   const image = assertImageTag(params.image, 'Image');
   const siteId = assertPositiveInt(params.siteId, 'Site id', { min: 1, max: Number.MAX_SAFE_INTEGER });
   const network = params.network ? assertNetworkName(params.network, 'Network') : null;
+  if (network && ![DOCKER_INTERNAL_NETWORK, DOCKER_EGRESS_NETWORK].includes(network)) throw new ValidationError('Network is not a configured SHAM runtime network.');
   const env = assertEnv(params.env, 'Environment');
   const dataMount = params.dataMount ? { source: params.dataMount.source, target: assertContainerPath(params.dataMount.target) } : null;
   const namedVolume = params.namedVolume ? String(params.namedVolume).slice(0, 200) : null;
@@ -441,6 +487,24 @@ async function networksEnsure({ name, internal = true }) {
   }
 }
 
+// Only the configured runtime networks: the control plane uses their subnets to
+// refuse workload traffic to the dashboard and direct site listeners.
+async function networksSubnets() {
+  const networks = [];
+  for (const name of new Set([DOCKER_INTERNAL_NETWORK, DOCKER_EGRESS_NETWORK].filter(Boolean))) {
+    const inspected = await runTool(DOCKER_BIN, ['network', 'inspect', name], { timeoutMs: 15_000 })
+      .then((result) => JSON.parse(result.stdout)?.[0]).catch(() => null);
+    if (!inspected) continue;
+    const config = inspected.IPAM?.Config || [];
+    const subnets = config.map((entry) => String(entry?.Subnet || '')).filter((subnet) => /^[0-9a-fA-F:.]+\/\d{1,3}$/.test(subnet));
+    // The gateway is the host side of the bridge: docker-proxy and host-originated
+    // connections arrive from it, so it must not be mistaken for a workload.
+    const gateways = config.map((entry) => String(entry?.Gateway || '')).filter((gateway) => /^[0-9a-fA-F:.]+$/.test(gateway));
+    networks.push({ name, subnets, gateways });
+  }
+  return { networks };
+}
+
 async function networksConnect({ network, containerId, alias }) {
   const networkName = assertNetworkName(network, 'Network');
   if (![DOCKER_INTERNAL_NETWORK, DOCKER_EGRESS_NETWORK].includes(networkName)) throw new ValidationError('Network is not a configured SHAM runtime network.');
@@ -461,50 +525,57 @@ async function composeConfigOp({ files, cwd, env, service, containerPort }) {
 
 async function composeUp({ project, files, cwd, env, service, containerPort }, emit) {
   const projectName = assertComposeProject(project, 'Compose project');
-  const { root, validatedFiles } = await fetchAndValidateComposeConfig({ files, cwd, env, service, containerPort, project: projectName });
-  await runTool(DOCKER_BIN, ['compose', '-p', projectName, ...composeFileArgs(validatedFiles), 'up', '-d', '--build', service], {
-    cwd: root, env, onLine: (level, line) => emit({ type: 'log', level, line })
-  });
+  const entry = await prepareComposeProject({ project: projectName, files, cwd, env, service, containerPort });
+  try {
+    await runTool(DOCKER_BIN, [...hardenedComposeArgs(projectName, entry), 'up', '-d', '--build', service], {
+      cwd: entry.root, env, onLine: (level, line) => emit({ type: 'log', level, line })
+    });
+  } catch (error) {
+    await forgetComposeProject(projectName);
+    throw error;
+  }
   emit({ type: 'result', data: {} });
 }
 
 async function composePs({ project, files, cwd, env, service }) {
-  const projectName = assertComposeProject(project, 'Compose project');
-  const validatedFiles = validateComposeFiles(files);
-  const root = projectRoot(cwd);
-  validateComposeService(service);
-  const result = await runTool(DOCKER_BIN, ['compose', '-p', projectName, ...composeFileArgs(validatedFiles), 'ps', '-q', service], { cwd: root, env, timeoutMs: 30_000 });
+  const { projectName, entry } = await composeProjectFor({ project, files, cwd, env, service });
+  const result = await runTool(DOCKER_BIN, [...hardenedComposeArgs(projectName, entry), 'ps', '-q', service], { cwd: entry.root, env, timeoutMs: 30_000 });
   return { containerId: result.stdout.trim() };
 }
 
 async function composePort({ project, files, cwd, env, service, containerPort }) {
-  const projectName = assertComposeProject(project, 'Compose project');
-  const validatedFiles = validateComposeFiles(files);
-  const root = projectRoot(cwd);
-  validateComposeService(service);
   const port = assertPort(containerPort, 'Container port');
-  const result = await runTool(DOCKER_BIN, ['compose', '-p', projectName, ...composeFileArgs(validatedFiles), 'port', service, String(port)], { cwd: root, env, timeoutMs: 30_000 });
+  const { projectName, entry } = await composeProjectFor({ project, files, cwd, env, service, containerPort });
+  const result = await runTool(DOCKER_BIN, [...hardenedComposeArgs(projectName, entry), 'port', service, String(port)], { cwd: entry.root, env, timeoutMs: 30_000 });
   const match = /:(\d+)\s*$/.exec(result.stdout.trim());
   if (!match) throw new Error(`Compose service ${service} did not publish container port ${port} to loopback.`);
   return { port: Number(match[1]) };
 }
 
-async function composeDown({ project, files, cwd, env }) {
+// Teardown never re-parses project files: use the model this agent started,
+// or fall back to Compose's own project labels (e.g. after an agent restart).
+async function removeComposeProject(projectName, env = undefined) {
+  const entry = composeProjects.get(projectName);
+  if (entry) {
+    await runTool(DOCKER_BIN, [...hardenedComposeArgs(projectName, entry), 'down', '--remove-orphans'], { cwd: entry.root, env, timeoutMs: 90_000 }).catch(() => {});
+    await forgetComposeProject(projectName);
+  }
+  await cleanupOrphanedComposeProject({ project: projectName });
+}
+
+// `files`/`cwd` are accepted for protocol compatibility but deliberately unused:
+// the project tree may already be gone or changed by the time it is torn down.
+async function composeDown({ project, env }) {
   const projectName = assertComposeProject(project, 'Compose project');
-  const validatedFiles = validateComposeFiles(files);
-  const root = projectRoot(cwd);
-  await runTool(DOCKER_BIN, ['compose', '-p', projectName, ...composeFileArgs(validatedFiles), 'down', '--remove-orphans'], { cwd: root, env, timeoutMs: 90_000 }).catch(() => {});
+  await removeComposeProject(projectName, env);
   return { removed: true };
 }
 
 async function composeExec({ project, files, cwd, env, service, command, timeoutMs }, emit) {
-  const projectName = assertComposeProject(project, 'Compose project');
-  const validatedFiles = validateComposeFiles(files);
-  const root = projectRoot(cwd);
-  validateComposeService(service);
   const cmd = assertCommandString(command, 'Command');
   const timeout = assertPositiveInt(timeoutMs, 'Timeout', { min: 100, max: 300_000, fallback: 5000 });
-  await runTool(DOCKER_BIN, ['compose', '-p', projectName, ...composeFileArgs(validatedFiles), 'exec', '-T', service, '/bin/sh', '-lc', cmd], { cwd: root, env, timeoutMs: timeout, onLine: (level, line) => emit({ type: 'log', level, line }) });
+  const { projectName, entry } = await composeProjectFor({ project, files, cwd, env, service });
+  await runTool(DOCKER_BIN, [...hardenedComposeArgs(projectName, entry), 'exec', '-T', service, '/bin/sh', '-lc', cmd], { cwd: entry.root, env, timeoutMs: timeout, onLine: (level, line) => emit({ type: 'log', level, line }) });
   emit({ type: 'result', data: { ok: true } });
 }
 
@@ -512,11 +583,9 @@ async function composeExec({ project, files, cwd, env, service, command, timeout
 // Cleanup (reconciliation of SHAM-owned resources only)
 // ---------------------------------------------------------------------------
 
-async function cleanupComposeProject({ project, file, cwd }) {
+async function cleanupComposeProject({ project }) {
   const projectName = assertComposeProject(project, 'Compose project');
-  const composeFile = projectRoot(file);
-  const root = projectRoot(cwd);
-  await runTool(DOCKER_BIN, ['compose', '-p', projectName, '-f', composeFile, 'down', '--remove-orphans'], { cwd: root, timeoutMs: 60_000 }).catch(() => {});
+  await removeComposeProject(projectName);
   return { cleaned: true };
 }
 
@@ -585,7 +654,7 @@ module.exports = {
   imagesBuild, imagesRemove,
   containersRun, containersStop, containersRemove, containersPort, containersLogs, containersWait,
   containersExec, containersStats, containersSandboxRun, containersSidecarRun, containersSidecarRemove,
-  networksEnsure, networksConnect,
+  networksEnsure, networksConnect, networksSubnets,
   composeConfigOp, composeUp, composePs, composePort, composeDown, composeExec,
   cleanupComposeProject, cleanupOrphanedComposeProject, cleanupManagedContainers, cleanupManagedImages,
   status, quiesceForRestore

@@ -15,7 +15,9 @@ the support and deprecation policy.
 - **Step-up** — an authenticated action that additionally requires recent password/step-up verification.
 - **Webhook** — provider/HMAC deployment-webhook authentication rather than a user session.
 
-API-token scopes are enforced by the authentication middleware on supported automation routes. Role requirements still apply.
+API-token scopes are enforced by the authentication middleware and bound to exact routes; see [API-token scopes](api-and-cli.md#api-token-scopes). Role requirements still apply.
+
+The `user` role can manage static and reverse-proxy sites only. Creating or switching to a Node.js, managed-process, container, or Compose runtime; setting or changing start, install, build, health-check, or readiness commands, dependency installation, or Git source settings; enabling `sham.yaml` manifests; and changing files, running `npm-install`, or restoring snapshots on a site that executes code (or that honours a `sham.yaml`) require an administrator and return `403` otherwise.
 
 ## Public/bootstrap/authentication
 
@@ -26,9 +28,9 @@ API-token scopes are enforced by the authentication middleware on supported auto
 | GET | `/api/public/status` | Public | Public status data for sites configured for status exposure. |
 | GET | `/api/auth/oidc/start` | Public | Start configured OIDC Authorization Code + PKCE login. |
 | GET | `/api/auth/oidc/callback` | Public | OIDC callback. |
-| POST | `/api/auth/register` | Public, first-run only | Create the initial administrator when no users exist. Public signup is disabled afterward. |
-| POST | `/api/auth/login` | Public | Password login. |
-| POST | `/api/auth/login/totp` | Public flow | Complete TOTP login challenge. |
+| POST | `/api/auth/register` | Public, first-run only | Create the initial administrator when no users exist. Requires `setupToken` (see `SHAM_SETUP_TOKEN`); `/api/bootstrap` reports `setupTokenRequired`. Public signup is disabled afterward. |
+| POST | `/api/auth/login` | Public | Password login. Ten failures for one account name within 15 minutes return `429` for that account. |
+| POST | `/api/auth/login/totp` | Public flow | Complete TOTP login challenge. Each `mfaToken` is single-use and is invalidated after five wrong codes; a TOTP code is accepted once per time step. |
 | POST | `/api/auth/login/passkey/options` | Public flow | Create passkey-login challenge options. |
 | POST | `/api/auth/login/passkey/verify` | Public flow | Verify passkey login. |
 | POST | `/api/auth/logout` | Optional auth | End browser session. |
@@ -238,7 +240,7 @@ Plugins can register additional routes/actions according to their manifest and p
 | DELETE | `/api/admin/alert-destinations/:id` | Admin | Delete alert destination. |
 | GET | `/api/admin/audit` | Admin | Read audit history. |
 | GET | `/api/admin/audit/export` | Admin | Export audit data. |
-| POST | `/api/admin/update` | Admin | Stage signed/acknowledged SHAM update archive. |
+| POST | `/api/admin/update` | Admin + step-up | Stage signed/acknowledged SHAM update archive. Multipart fields: `archive`, `password`, optional `allowUnsigned`. |
 | DELETE | `/api/admin/update` | Admin | Cancel staged update. |
 
 ## Metrics/status outside JSON API

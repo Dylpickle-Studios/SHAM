@@ -4,6 +4,158 @@ All notable public changes to SHAM are documented here. The project follows Sema
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-10-27
+
+### Added
+
+- First-run setup token. While no account exists, `POST /api/auth/register`
+  requires a one-time token that SHAM prints in its log and stores in
+  `SHAM_DATA_PATH/.setup-token` (or `SHAM_SETUP_TOKEN`, at least 16
+  characters). The first-run form asks for it.
+- **Operations → External backups → Export recovery key** (`POST
+  /api/admin/security/recovery-key`, browser session and password required)
+  downloads the master keyring for offline storage.
+- Dedicated trusted keys for SHAM core updates, managed under **Operations →
+  Safe SHAM update → Trusted update signing keys** (`GET`/`POST
+  /api/admin/update-trusted-keys`, `DELETE
+  /api/admin/update-trusted-keys/:id`).
+- **Allow reinstall or downgrade** acknowledgement for staged updates
+  (`allowDowngrade`).
+
+### Changed
+
+- Compose sites are hardened by default: every service runs with
+  `cap_drop: [ALL]`, a compatibility capability set (`CHOWN`, `DAC_OVERRIDE`,
+  `FOWNER`, `FSETID`, `KILL`, `SETGID`, `SETUID`, `SETPCAP`,
+  `NET_BIND_SERVICE`) and `no-new-privileges:true`. The Runtime Agent runs
+  Compose from the exact normalized model it validated, held in its private
+  temporary directory.
+- `cloudflared` connectors start with `--metrics 127.0.0.1:0`.
+- Restoring a backup keeps the host's own master keyring, JWT secret, setup
+  token and active SHAM application release. Rotating the master key keeps up
+  to 16 retired keys for decryption instead of discarding them.
+
+### Security
+
+- Updated the bundled `cloudflared` to 2026.10.4 (from 2026.7.3). This picks up
+  VULN-176088 (debug endpoints on the connector's loopback metrics server are
+  now allowlisted, so managed-process sites sharing the SHAM container's
+  loopback can no longer reach them), VULN-141859 (request path normalization
+  with Access rules), stripping of authentication data before forwarding to
+  origins, and Go toolchain fixes including GO-2026-6600. Releases 2026.8.0 and
+  2026.8.1 had origin path regressions and are skipped.
+- Updated `multer` to 2.5.0 (GHSA-q7qp-rjg7-q26m: denial of service via a
+  pending asynchronous `fileFilter` after request teardown).
+- Updated transitive dependencies: `proxy-addr` 2.0.8 (GHSA-jqcg-44mw-7w3h:
+  client IP spoofing through an IPv4-mapped IPv6 trusted-proxy subnet),
+  `body-parser` 2.4.0 (GHSA-27r3-jxmh-p828: denial of service via trailing
+  bytes after a compressed request body), and `follow-redirects` 1.16.2
+  (GHSA-q3jh-wrc6-jgq8, GHSA-8r9p-f939-6h3c: credential headers forwarded
+  across origins on redirect).
+- The Runtime Agent's container-run operation now accepts only the configured
+  SHAM runtime networks, matching network ensure/connect. Previously any valid
+  network name, including `host`, was accepted from an agent-token holder.
+- Deploy webhooks sent to `/api/v1/hooks/deploy/:id` now verify the HMAC over
+  the request body. The raw body was captured only for the legacy path, so v1
+  signatures were computed over an empty body and real provider deliveries
+  failed verification.
+- Accounts with the `user` role can no longer cause SHAM to execute code.
+  Process, Node, container and Compose runtimes; start, install, build,
+  readiness and health commands; dependency installation; Git source settings;
+  `sham.yaml` manifests; and file changes on sites that run code now require an
+  administrator. Previously a `user` could create a process site whose command
+  ran as the SHAM service account, read the JWT secret and master keyring, and
+  take over an administrator account.
+- Hosted Compose policy is now an allowlist of top-level, service, build,
+  deploy, logging, network, volume, config and secret keys. It rejects keys
+  that the previous denylist missed, including `device_cgroup_rules`,
+  `cgroup_parent`, `runtime`, `isolation`, `sysctls`, `userns_mode`,
+  `pid`/`ipc` namespace sharing, `security_opt` beyond `no-new-privileges`,
+  `build.additional_contexts` outside the project, and remote build contexts.
+  Build contexts, Dockerfiles, `env_file`, and config/secret files must stay
+  inside the project after symlinks are resolved, checked by the Runtime Agent.
+  Compose no longer re-reads project files after validation, which closes a
+  swap-after-check race.
+- Containers on SHAM's runtime networks receive 403 from the dashboard and from
+  sites' direct and private listeners, so they can no longer bypass the shared
+  edge and its access rules. The Runtime Agent reports the networks' subnets
+  through a new operation.
+- `CF-Connecting-IP` and `CF-IPCountry` from loopback are trusted only when
+  the connection belongs to a cloudflared process supervised by SHAM (Linux).
+  Every SHAM proxy path rewrites or removes these headers, so a proxy site
+  cannot be used to forge a visitor's IP or country.
+- Proxy targets may no longer point at link-local or cloud metadata addresses
+  (`169.254.0.0/16`, `fe80::/10`, `fd00:ec2::254`) or at the SHAM dashboard
+  port.
+- Sign-in brute-force protection: rate-limit buckets group IPv6 clients by
+  /64; an account allows 10 failed password or second-factor attempts per
+  client network and 100 in total per 15 minutes, so a stranger who knows a
+  username cannot lock its owner out; MFA login tokens become invalid after 5
+  failures and are single-use; a TOTP code cannot be accepted twice.
+- API token scopes are now assigned per route. Logs, the audit log and
+  runtime events (and their exports) require `logs:read`. Site file contents, configuration export and
+  plugin actions require full access. `deploy` and `sites:control` cover only
+  the site lifecycle routes.
+- Staging a SHAM update requires password confirmation. Core updates are
+  verified only against trusted update keys (plugin publisher keys no longer
+  count), and an update that is not newer than the running version requires an
+  explicit acknowledgement.
+- Backups no longer contain the master keyring, JWT secret or setup token, so
+  a copy in S3, SFTP or an external directory can no longer decrypt itself.
+  Symlinks that cannot be archived safely (absolute or escaping) are skipped
+  with a warning instead of failing every backup.
+- JavaScript plugins run in a sandbox that exposes no host-realm objects, and
+  a plugin's uncaught exception or unhandled rejection stops its worker
+  without SHAM formatting the thrown value. This closes two confirmed escapes
+  to the SHAM process.
+  Plugin SQL, both declarative and JavaScript, is checked with SQLite `EXPLAIN`:
+  - **Reads:** an allowlist of non-sensitive core tables and columns, plus the
+    plugin's own tables.
+  - **Writes and schema changes:** only the plugin's own `plugin_<id>_` tables.
+- Dependency scans run `npm audit` on a temporary copy of the manifest and
+  lockfile, so a site's `.npmrc` can no longer redirect SHAM's requests. The
+  operator's `NPM_CONFIG_REGISTRY` and user/global npm config still apply.
+
+### Upgrade notes
+
+- Upgrade the control plane and Runtime Agent together with the same pinned
+  `SHAM_IMAGE`. An older agent leaves the workload-network guard inactive.
+- **After upgrading, export the recovery key** (Operations → External
+  backups) and store it offline, separate from backups. New backups cannot be decrypted on a replacement host without it,
+  or without the `SHAM_MASTER_KEY` you supply. Export it again after every
+  master key rotation. After a restore, users sign in again.
+- Re-add the SHAM release signing key under **Trusted update signing keys**.
+  Plugin publisher keys are not copied over. Until a key is added, signed
+  updates are treated as unsigned.
+- Accounts with the `user` role can no longer create or change code-running
+  sites. On first start, SHAM turns off `sham.yaml` support for static and
+  proxy sites that contain no manifest, which changes nothing at runtime.
+  Users cannot change the files of a static or proxy site that does contain a
+  manifest until an administrator reviews it or disables manifests for that
+  site. Review sites created by non-admin accounts for an unexpected
+  `sham.yaml`, and for process runtimes created before this release.
+- Compose files that use keys outside the allowlist, `include`, `extends` with
+  `file`, symlinked paths, build `tags`/`ssh`/`cache_to`, remote build contexts
+  or `secrets` with `environment:` are rejected. `image:` next to `build:` is
+  renamed to the project-scoped `<project>-<service>`, and other services
+  that used the same tag follow the rename without pulling. Config and
+  secret files must be UTF-8 and at most 1 MiB. Services lose `MKNOD`,
+  `NET_RAW`, `SETFCAP`, `SYS_CHROOT` and `AUDIT_WRITE`, and setuid escalation
+  such as `sudo` stops working.
+- Workloads must reach other SHAM sites by domain through the shared edge, not
+  through `sham:8080` or a site's direct port.
+- Plugins that read sensitive tables, select all columns from `sites`, write
+  core tables, use `BEGIN`/`COMMIT` (plugins share SHAM's database
+  connection), or `require` modules other than `crypto` are rejected or
+  disabled at startup. Plugin results pass through JSON, so `Date` values
+  become strings.
+- API tokens limited to `read` lose access to site file contents, and log
+  exports now need `logs:read`. Replace narrow tokens where scripts depend on
+  those routes.
+- A fresh install needs the setup token from the server log
+  (`docker logs sham`) to create the first administrator.
+- MFA sign-ins that are in progress during the upgrade must be restarted.
+
 ## [1.4.0] — 2026-09-28
 
 ### Added

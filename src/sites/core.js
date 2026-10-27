@@ -9,6 +9,7 @@
 
 const { path, crypto, net, Worker, STATS_FLUSH_INTERVAL_MS, VISITOR_RETENTION_DAYS, MINIFY_WORKERS, MINIFY_QUEUE_LIMIT, COMPRESSION_WORKERS, COMPRESSION_QUEUE_LIMIT, VISITOR_PENDING_BUCKETS, FIREWALL_RATE_LIMIT_BUCKETS, JWT_SECRET, responseChunkBytes, hostForUrl, requestHostname, requestIdentity, buildIpBlockList, hydrateSite, siteIsolation, siteRoot } = require('./shared');
 const { maskIp } = require('../visitor-intelligence');
+const { isWorkloadAddress, WORKLOAD_FORBIDDEN_BODY } = require('../runtime/workload-networks');
 const { EDGE_HTTP_PORT, EDGE_HTTPS_PORT } = require('../config');
 
 class CoreSiteManager {
@@ -574,6 +575,7 @@ class CoreSiteManager {
 
   checkAccess(site, req) {
     const identity = requestIdentity(site, req);
+    if (isWorkloadAddress(req.socket?.remoteAddress)) return { allowed: false, status: 403, message: WORKLOAD_FORBIDDEN_BODY, identity };
     if (site.domain_only && requestHostname(req) !== site.domain) {
       return { allowed: false, status: 421, message: 'This site is only available through its configured domain.', identity };
     }

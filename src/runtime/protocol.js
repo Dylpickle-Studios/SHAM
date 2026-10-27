@@ -29,6 +29,7 @@ const OPERATIONS = Object.freeze({
   CONTAINERS_SIDECAR_REMOVE: { method: 'POST', path: '/v1/containers/sidecar-remove' },
   NETWORKS_ENSURE: { method: 'POST', path: '/v1/networks/ensure' },
   NETWORKS_CONNECT: { method: 'POST', path: '/v1/networks/connect' },
+  NETWORKS_SUBNETS: { method: 'POST', path: '/v1/networks/subnets' },
   COMPOSE_CONFIG: { method: 'POST', path: '/v1/compose/config' },
   COMPOSE_UP: { method: 'POST', path: '/v1/compose/up', stream: true },
   COMPOSE_PS: { method: 'POST', path: '/v1/compose/ps' },

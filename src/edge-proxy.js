@@ -12,7 +12,7 @@ const tls = require('node:tls');
 const httpProxy = require('http-proxy');
 const { EDGE_HTTP_PORT, EDGE_HTTPS_PORT, EDGE_HOST, HTTP_REQUEST_TIMEOUT_MS } = require('./config');
 const { certbotPaths, hasCertificate } = require('./integrations');
-const { requestHostname, requestIdentity, INTERNAL_EDGE_TOKEN } = require('./sites/shared');
+const { requestHostname, sanitizeCloudflareHeaders, INTERNAL_EDGE_TOKEN } = require('./sites/shared');
 
 function listen(server, port, host) {
   return new Promise((resolve, reject) => {
@@ -131,7 +131,8 @@ class EdgeProxy {
     }
   }
   prepareRequest(site, req) {
-    const identity = requestIdentity(site, req, { trustLocalCloudflareTunnel: this.acceptsLocalTunnelIdentity(site) });
+    const identity = sanitizeCloudflareHeaders(site, req, { trustLocalCloudflareTunnel: this.acceptsLocalTunnelIdentity(site) });
+    if (site.preview) return;
     delete req.headers['x-sham-edge-token'];
     delete req.headers['x-sham-client-ip'];
     delete req.headers['x-sham-client-country'];
@@ -148,14 +149,14 @@ class EdgeProxy {
       res.writeHead(308, { Location: `https://${site.domain}${port}${req.url}` });
       return res.end();
     }
-    if (!site.preview) this.prepareRequest(site, req);
+    this.prepareRequest(site, req);
     this.proxy.web(req, res, { target });
   }
   upgrade(req, socket, head) {
     const site = this.siteFor(req);
     const target = site && this.target(site);
     if (!target) return socket.destroy();
-    if (!site.preview) this.prepareRequest(site, req);
+    this.prepareRequest(site, req);
     this.proxy.ws(req, socket, head, { target });
   }
   secureContext(domain) {

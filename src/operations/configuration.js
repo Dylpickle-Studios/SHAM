@@ -1,6 +1,7 @@
 'use strict';
 
 const { isEncrypted } = require('../secret-store');
+const { findUnarchivableEntries, verifyBackupArchive } = require('../backup-restore');
 const { getRuntimeClient } = require('../runtime/client');
 const { fs, path, crypto, DATA_DIR, PREVIEWS_DIR, BACKUPS_DIR, TAR_BIN, RESTIC_BIN, AWS_BIN, SFTP_BIN, JOB_POLL_INTERVAL_MS, JOB_TIMEOUT_MS, BACKUP_TIMEOUT_MS, encrypt, decrypt, getSecretSetting, setSecretSetting, appendTail, runProcess, parseCron, cronMatches, nextCronDate, pathInside, sftpQuote, siteRoot } = require('./shared');
 
@@ -396,12 +397,26 @@ class ConfigurationOperations {
       await fs.promises.writeFile(localPath, '', { flag: 'wx', mode: 0o600 });
       databaseSnapshotDirectory = await fs.promises.mkdtemp(path.join(DATA_DIR, 'tmp', 'backup-db-'));
       await this.db.backup(path.join(databaseSnapshotDirectory, 'sham.db'));
+      // Links planted by site code (absolute or escaping) would make archive verification fail every
+      // backup; skip exactly those members and keep verification strict for everything else.
+      const skipped = await findUnarchivableEntries(DATA_DIR);
+      const literalExcludes = [];
+      if (skipped.length) {
+        // GNU tar: literal, anchored member names; -X is line-based, so names containing a newline go on the command line.
+        const excludeFile = path.join(databaseSnapshotDirectory, 'exclude.txt');
+        await fs.promises.writeFile(excludeFile, skipped.filter((name) => !name.includes('\n')).map((name) => `${name}\n`).join(''), { mode: 0o600 });
+        literalExcludes.push('--anchored', '--no-wildcards', '-X', excludeFile, ...skipped.filter((name) => name.includes('\n')).map((name) => `--exclude=${name}`));
+        this.manager.log(null, 'warning', `Backup skipped ${skipped.length} unsafe link or special file${skipped.length === 1 ? '' : 's'}: ${skipped.slice(0, 20).map((name) => JSON.stringify(name.slice(2, 300))).join(', ')}${skipped.length > 20 ? ', …' : ''}`);
+      }
       await runProcess(TAR_BIN, [
         '--exclude=./tmp', '--exclude=./backups', '--exclude=./updates', '--exclude=./runtime-agent', '--exclude=./.restore-*',
         '--exclude=./sham.db', '--exclude=./sham.db-wal', '--exclude=./sham.db-shm',
+        // Host key material and the running release are never archived; restore keeps the host's own copies.
+        '--exclude=./app-runtime', '--exclude=./.master-keyring.json*', '--exclude=./.jwt-secret', '--exclude=./.setup-token',
+        ...literalExcludes,
         '-czf', localPath, '-C', DATA_DIR, '.', '-C', databaseSnapshotDirectory, 'sham.db'
       ], this.trackedProcessOptions({ timeoutMs: BACKUP_TIMEOUT_MS, onLine: (level, line) => this.manager.log(null, level, `backup: ${line}`) }));
-      await require('../backup-restore').verifyBackupArchive(localPath);
+      await verifyBackupArchive(localPath);
       await fs.promises.chmod(localPath, 0o600);
 
       const stat = await fs.promises.stat(localPath);

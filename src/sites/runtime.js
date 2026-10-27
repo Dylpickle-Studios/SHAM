@@ -12,8 +12,10 @@ const {
   fs, path, net, httpProxy, SITE_DATA_DIR,
   DOCKER_INTERNAL_NETWORK, DOCKER_EGRESS_NETWORK,
   HTTP_REQUEST_TIMEOUT_MS, hostForUrl, listen, closeServer,
-  realFileInside, ensureDockerInternalNetwork, hydrateSite, siteRoot
+  realFileInside, ensureDockerInternalNetwork, hydrateSite, siteRoot, sanitizeCloudflareHeaders
 } = require('./shared');
+const { isWorkloadAddress, WORKLOAD_FORBIDDEN_BODY } = require('../runtime/workload-networks');
+const { assertSafeProxyTarget } = require('../validation');
 const { HEALTH_CHECK_CONCURRENCY } = require('../config');
 const { resolveRuntimeSpec, readManifest } = require('../runtime-spec');
 const {
@@ -75,28 +77,130 @@ function assertComposePathInside(root, value, label) {
   if (resolved !== baseRoot && !resolved.startsWith(base)) throw new Error(`${label} must stay inside the site project.`);
 }
 
+// Compose is an allowlist: the normalized `docker compose config` model may
+// only use keys SHAM understands. Anything new in a future Compose release (or
+// an obscure host-level option) is rejected until it has been reviewed.
+const COMPOSE_TOP_LEVEL_KEYS = new Set(['name', 'services', 'networks', 'volumes', 'configs', 'secrets']);
+const COMPOSE_SERVICE_KEYS = new Set([
+  'attach', 'build', 'cap_drop', 'command', 'configs', 'cpu_count', 'cpu_percent', 'cpu_period', 'cpu_quota', 'cpu_shares', 'cpus', 'cpuset',
+  'depends_on', 'deploy', 'develop', 'dns', 'dns_opt', 'dns_search', 'domainname', 'entrypoint', 'env_file', 'environment', 'expose', 'extra_hosts',
+  'group_add', 'healthcheck', 'hostname', 'image', 'init', 'ipc', 'labels', 'links', 'logging', 'mac_address', 'mem_limit', 'mem_reservation',
+  'mem_swappiness', 'memswap_limit', 'networks', 'oom_score_adj', 'pid', 'pids_limit', 'platform', 'ports', 'profiles', 'pull_policy',
+  'read_only', 'restart', 'scale', 'secrets', 'security_opt', 'shm_size', 'stdin_open', 'stop_grace_period', 'stop_signal', 'tmpfs', 'tty',
+  'ulimits', 'user', 'uts', 'volumes', 'working_dir'
+]);
+// Keys that are harmless when unset/false/empty but grant host-level access otherwise.
+const COMPOSE_FORBIDDEN_SERVICE_KEYS = {
+  privileged: 'cannot run privileged.',
+  network_mode: 'cannot override its network namespace.',
+  cap_add: 'cannot add Linux capabilities.',
+  devices: 'cannot access host devices.',
+  device_cgroup_rules: 'cannot change device cgroup rules.',
+  volumes_from: 'cannot inherit volumes from another container.',
+  container_name: 'cannot set container_name because SHAM must isolate project instances.',
+  cgroup: 'cannot change its cgroup namespace.',
+  cgroup_parent: 'cannot choose a cgroup parent.',
+  userns_mode: 'cannot change its user namespace.',
+  runtime: 'cannot choose a container runtime.',
+  isolation: 'cannot choose an isolation technology.',
+  sysctls: 'cannot set kernel parameters (sysctls).',
+  oom_kill_disable: 'cannot disable the OOM killer.',
+  external_links: 'cannot link to containers outside its project.',
+  credential_spec: 'cannot use credential specs.',
+  gpus: 'cannot access host GPUs.',
+  blkio_config: 'cannot configure host block-device I/O.',
+  storage_opt: 'cannot set storage driver options.',
+  cpu_rt_runtime: 'cannot request realtime CPU scheduling.',
+  cpu_rt_period: 'cannot request realtime CPU scheduling.',
+  annotations: 'cannot set OCI runtime annotations.'
+};
+const COMPOSE_BUILD_KEYS = new Set([
+  'context', 'dockerfile', 'dockerfile_inline', 'args', 'labels', 'target', 'shm_size', 'extra_hosts', 'network', 'cache_from', 'no_cache',
+  'pull', 'platforms', 'additional_contexts', 'secrets'
+]);
+const COMPOSE_FORBIDDEN_BUILD_KEYS = {
+  privileged: 'cannot build privileged.',
+  entitlements: 'cannot request privileged build entitlements.',
+  ssh: 'cannot forward SSH agents or keys into builds.',
+  cache_to: 'cannot export build caches.',
+  tags: 'cannot apply extra image tags; built images stay project-scoped.',
+  isolation: 'cannot choose a build isolation technology.',
+  ulimits: 'cannot set build ulimits.'
+};
+const COMPOSE_RESOURCE_KEYS = {
+  network: new Set(['name', 'driver', 'driver_opts', 'ipam', 'internal', 'attachable', 'enable_ipv6', 'labels', 'external']),
+  volume: new Set(['name', 'driver', 'driver_opts', 'labels', 'external']),
+  config: new Set(['name', 'file', 'content', 'labels', 'external']),
+  secret: new Set(['name', 'file', 'labels', 'external'])
+};
+const COMPOSE_DEPLOY_KEYS = new Set(['resources', 'restart_policy', 'replicas', 'labels', 'mode', 'update_config', 'rollback_config', 'placement', 'endpoint_mode']);
+const COMPOSE_RESOURCE_LIMIT_KEYS = new Set(['cpus', 'memory', 'pids']);
+const COMPOSE_SERVICE_NETWORK_KEYS = new Set(['aliases', 'ipv4_address', 'ipv6_address', 'priority', 'mac_address', 'link_local_ips']);
+const COMPOSE_LOGGING_DRIVERS = new Set(['json-file', 'local', 'none']);
+const COMPOSE_LOGGING_OPTIONS = new Set(['max-size', 'max-file', 'compress', 'mode', 'max-buffer-size', 'tag', 'labels', 'env']);
+const COMPOSE_ULIMITS = new Set(['nofile', 'nproc', 'core', 'stack']);
+
+const composeValueSet = (value) => value !== undefined && value !== null && value !== false && value !== ''
+  && !(Array.isArray(value) && !value.length) && !(typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).length);
+
+function assertComposeKeys(object, allowed, label, forbidden = {}) {
+  if (!object || typeof object !== 'object' || Array.isArray(object)) return;
+  // Forbidden keys first, in declaration order, so the most severe problem is reported.
+  for (const [key, message] of Object.entries(forbidden)) if (composeValueSet(object[key])) throw new Error(`${label} ${message}`);
+  for (const key of Object.keys(object)) {
+    if (!allowed.has(key) && !Object.hasOwn(forbidden, key)) throw new Error(`${label} uses unsupported Compose key "${key}"; SHAM only permits an allowlisted set of Compose options.`);
+  }
+}
+
+const REMOTE_BUILD_CONTEXT = /^(?:[a-z][a-z0-9+.-]*:\/\/|git@|github\.com\/)|\.git(?:#.*)?$/i;
+
+// Every host path a normalized Compose model can make Docker read. The agent
+// re-checks each one with realpath; the control plane checks them lexically.
+function composeReferencedPaths(config, root) {
+  const services = config?.services || {};
+  const paths = [];
+  for (const [name, service] of Object.entries(services)) {
+    const prefix = `Compose service ${name}`;
+    const build = typeof service?.build === 'string' ? { context: service.build } : service?.build;
+    if (build && typeof build === 'object') {
+      const contextValue = String(build.context || '.');
+      if (REMOTE_BUILD_CONTEXT.test(contextValue)) throw new Error(`${prefix} build context must be a directory inside the site project; remote build contexts are not supported.`);
+      const context = path.resolve(root, contextValue);
+      paths.push({ label: `${prefix} build context`, path: context, type: 'directory' });
+      if (build.dockerfile && !build.dockerfile_inline) paths.push({ label: `${prefix} Dockerfile`, path: path.resolve(context, String(build.dockerfile)), type: 'file' });
+      for (const [contextName, value] of Object.entries(build.additional_contexts || {})) {
+        const raw = String(value || '');
+        if (raw.startsWith('service:')) {
+          if (!Object.hasOwn(services, raw.slice('service:'.length))) throw new Error(`${prefix} additional build context ${contextName} must reference a service in this project.`);
+          continue;
+        }
+        if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || REMOTE_BUILD_CONTEXT.test(raw)) throw new Error(`${prefix} additional build context ${contextName} must be a directory inside the site project or a project service.`);
+        paths.push({ label: `${prefix} additional build context ${contextName}`, path: path.resolve(root, raw), type: 'directory' });
+      }
+    }
+    const envFiles = Array.isArray(service?.env_file) ? service.env_file : service?.env_file ? [service.env_file] : [];
+    for (const envFile of envFiles) {
+      const file = typeof envFile === 'object' ? envFile?.path : envFile;
+      if (typeof file !== 'string' || !file) continue;
+      paths.push({ label: `${prefix} env_file`, path: path.resolve(root, file), type: 'file', optional: typeof envFile === 'object' && envFile?.required === false });
+    }
+  }
+  for (const [kind, entries] of [['config', config?.configs || {}], ['secret', config?.secrets || {}]]) {
+    for (const [name, definition] of Object.entries(entries)) {
+      if (definition?.file) paths.push({ label: `Compose ${kind} ${name}`, path: path.resolve(root, String(definition.file)), type: 'file' });
+    }
+  }
+  return paths;
+}
+
 function validateComposeProjectPaths(config, root) {
   const services = config?.services || {};
   if (Object.keys(services).length > 64) throw new Error('Compose projects may contain at most 64 services.');
   if (Object.keys(config?.networks || {}).length > 128 || Object.keys(config?.volumes || {}).length > 128) throw new Error('Compose projects declare too many networks or volumes.');
   for (const [name, service] of Object.entries(services)) {
-    const prefix = `Compose service ${name}`;
-    if (service?.container_name) throw new Error(`${prefix} cannot set container_name because SHAM must isolate project instances.`);
-    const build = service?.build;
-    if (typeof build === 'string') assertComposePathInside(root, build, `${prefix} build context`);
-    else if (build && typeof build === 'object') {
-      const context = String(build.context || '.');
-      assertComposePathInside(root, context, `${prefix} build context`);
-      if (build.dockerfile) {
-        const dockerfile = String(build.dockerfile);
-        const dockerfilePath = path.isAbsolute(dockerfile) ? dockerfile : path.resolve(root, context, dockerfile);
-        assertComposePathInside(root, dockerfilePath, `${prefix} Dockerfile`);
-      }
-    }
-    const envFiles = Array.isArray(service?.env_file) ? service.env_file : service?.env_file ? [service.env_file] : [];
-    for (const envFile of envFiles) assertComposePathInside(root, envFile, `${prefix} env_file`);
-    if (service?.credential_spec?.file) assertComposePathInside(root, service.credential_spec.file, `${prefix} credential spec`);
+    if (service?.container_name) throw new Error(`Compose service ${name} cannot set container_name because SHAM must isolate project instances.`);
   }
+  for (const entry of composeReferencedPaths(config, root)) assertComposePathInside(root, entry.path, entry.label);
   for (const [kind, entries] of [
     ['network', config?.networks || {}], ['volume', config?.volumes || {}], ['config', config?.configs || {}], ['secret', config?.secrets || {}]
   ]) {
@@ -104,8 +208,65 @@ function validateComposeProjectPaths(config, root) {
       if (definition?.external) throw new Error(`Compose ${kind} ${name} cannot be external; SHAM-managed projects must not attach unmanaged Docker resources.`);
       if ((kind === 'volume' || kind === 'network') && definition?.name && definition.name !== `${config.name}_${name}`) throw new Error(`Compose ${kind} ${name} must use its project-scoped resource name.`);
       if (kind === 'volume' && ((definition?.driver && definition.driver !== 'local') || Object.keys(definition?.driver_opts || {}).length)) throw new Error(`Compose volume ${name} cannot configure a volume driver or host mount options.`);
-      if ((kind === 'config' || kind === 'secret') && definition?.file) assertComposePathInside(root, definition.file, `Compose ${kind} ${name}`);
+      if (kind === 'network' && ((definition?.driver && definition.driver !== 'bridge') || Object.keys(definition?.driver_opts || {}).length)) throw new Error(`Compose network ${name} must use the bridge driver without driver options.`);
+      if (kind === 'network' && definition?.ipam && ((definition.ipam.driver && definition.ipam.driver !== 'default') || Object.keys(definition.ipam.options || {}).length)) throw new Error(`Compose network ${name} cannot configure an IPAM driver or IPAM options.`);
+      assertComposeKeys(definition, COMPOSE_RESOURCE_KEYS[kind], `Compose ${kind} ${name}`);
     }
+  }
+}
+
+function composeServicePolicy(name, service, config) {
+  const prefix = `Compose service ${name}`;
+  assertComposeKeys(service, COMPOSE_SERVICE_KEYS, prefix, COMPOSE_FORBIDDEN_SERVICE_KEYS);
+  for (const [field, value, allowed] of [['PID', service?.pid, ['']], ['IPC', service?.ipc, ['', 'private', 'shareable', 'none']], ['UTS', service?.uts, ['']]]) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'host' || /^(?:container|service):/.test(normalized)) throw new Error(`${prefix} cannot join the host or another container’s ${field}.`);
+    if (!allowed.includes(normalized)) throw new Error(`${prefix} uses an unsupported ${field} mode.`);
+  }
+  const extraHosts = Array.isArray(service?.extra_hosts) ? service.extra_hosts : Object.entries(service?.extra_hosts || {}).map(([host, ip]) => `${host}:${ip}`);
+  if (extraHosts.some((entry) => /host-gateway/i.test(String(entry)))) throw new Error(`${prefix} cannot map the Docker host gateway.`);
+  for (const option of Array.isArray(service?.security_opt) ? service.security_opt : []) {
+    if (/unconfined|label\s*[:=]\s*disable/i.test(String(option))) throw new Error(`${prefix} cannot disable container security profiles.`);
+    if (!/^no-new-privileges(?:[:=]true)?$/i.test(String(option).trim())) throw new Error(`${prefix} may only set the no-new-privileges security option.`);
+  }
+  if (Number(service?.oom_score_adj || 0) < 0) throw new Error(`${prefix} cannot lower its OOM score.`);
+  if (service?.logging) {
+    assertComposeKeys(service.logging, new Set(['driver', 'options']), `${prefix} logging`);
+    if (service.logging.driver && !COMPOSE_LOGGING_DRIVERS.has(service.logging.driver)) throw new Error(`${prefix} may only use the json-file, local, or none logging drivers.`);
+    for (const option of Object.keys(service.logging.options || {})) if (!COMPOSE_LOGGING_OPTIONS.has(option)) throw new Error(`${prefix} uses unsupported logging option "${option}".`);
+  }
+  for (const limit of Object.keys(service?.ulimits || {})) if (!COMPOSE_ULIMITS.has(limit)) throw new Error(`${prefix} cannot set the ${limit} ulimit.`);
+  if (service?.deploy) {
+    assertComposeKeys(service.deploy, COMPOSE_DEPLOY_KEYS, `${prefix} deploy`);
+    assertComposeKeys(service.deploy.resources, new Set(['limits', 'reservations']), `${prefix} deploy resources`);
+    for (const kind of ['limits', 'reservations']) {
+      const resources = service.deploy.resources?.[kind];
+      if (resources?.devices?.length || resources?.generic_resources?.length) throw new Error(`${prefix} cannot reserve host devices.`);
+      assertComposeKeys(resources, COMPOSE_RESOURCE_LIMIT_KEYS, `${prefix} deploy resources`, { devices: 'cannot reserve host devices.', generic_resources: 'cannot reserve host devices.' });
+    }
+  }
+  for (const [network, definition] of Object.entries(Array.isArray(service?.networks) ? {} : service?.networks || {})) {
+    assertComposeKeys(definition, COMPOSE_SERVICE_NETWORK_KEYS, `${prefix} network ${network}`);
+  }
+  const build = typeof service?.build === 'string' ? null : service?.build;
+  if (build) {
+    assertComposeKeys(build, COMPOSE_BUILD_KEYS, `${prefix} build`, COMPOSE_FORBIDDEN_BUILD_KEYS);
+    const buildNetwork = String(build.network || '').trim().toLowerCase();
+    if (buildNetwork === 'host') throw new Error(`${prefix} cannot use host networking while building.`);
+    if (!['', 'default', 'none'].includes(buildNetwork)) throw new Error(`${prefix} may only build on the default or none network.`);
+    const buildHosts = Array.isArray(build.extra_hosts) ? build.extra_hosts : Object.entries(build.extra_hosts || {}).map(([host, ip]) => `${host}:${ip}`);
+    if (buildHosts.some((entry) => /host-gateway/i.test(String(entry)))) throw new Error(`${prefix} cannot map the Docker host gateway.`);
+    for (const entry of build.cache_from || []) {
+      if (/(?:^|,)\s*(?:type\s*=\s*local|src|dest)\b/i.test(String(entry))) throw new Error(`${prefix} cannot import build caches from host paths.`);
+    }
+  }
+  for (const volume of service?.volumes || []) {
+    const source = typeof volume === 'string' ? volume.split(':')[0] : volume?.source;
+    const type = typeof volume === 'object' ? String(volume?.type || '') : (/^(?:\.?\.?\/|\/|[A-Za-z]:[\\/])/.test(String(source || '')) ? 'bind' : 'volume');
+    if (type === 'bind') throw new Error(`${prefix} cannot use host bind mounts. Use named volumes instead.`);
+    if (String(source || '').includes('docker.sock')) throw new Error(`${prefix} cannot mount the Docker socket.`);
+    if (!['volume', 'tmpfs'].includes(type)) throw new Error(`${prefix} may only mount named volumes or tmpfs.`);
+    if (type === 'volume' && source && !Object.hasOwn(config?.volumes || {}, source)) throw new Error(`${prefix} may only mount volumes declared by this project.`);
   }
 }
 
@@ -113,30 +274,12 @@ function composeRuntimePolicy(config, serviceName, { containerPort = null, requi
   const services = config?.services || {};
   const selected = services[serviceName];
   if (!selected) throw new Error(`Compose service ${serviceName} was not found.`);
+  for (const key of Object.keys(config || {})) {
+    if (!COMPOSE_TOP_LEVEL_KEYS.has(key) && !key.startsWith('x-')) throw new Error(`Compose project uses unsupported top-level key "${key}"; SHAM only permits an allowlisted set of Compose options.`);
+  }
   for (const [name, service] of Object.entries(services)) {
     const prefix = `Compose service ${name}`;
-    if (service?.privileged) throw new Error(`${prefix} cannot run privileged.`);
-    const networkMode = String(service?.network_mode || '').trim().toLowerCase();
-    if (networkMode) throw new Error(`${prefix} cannot override its network namespace.`);
-    for (const [field, value] of [['PID', service?.pid], ['IPC', service?.ipc], ['UTS', service?.uts], ['user namespace', service?.userns_mode], ['cgroup namespace', service?.cgroup]]) {
-      const normalized = String(value || '').trim().toLowerCase();
-      if (normalized === 'host' || normalized.startsWith('container:')) throw new Error(`${prefix} cannot join the host or another container’s ${field}.`);
-    }
-    if (Array.isArray(service?.cap_add) && service.cap_add.length) throw new Error(`${prefix} cannot add Linux capabilities.`);
-    if (Array.isArray(service?.devices) && service.devices.length) throw new Error(`${prefix} cannot access host devices.`);
-    if (Array.isArray(service?.volumes_from) && service.volumes_from.length) throw new Error(`${prefix} cannot inherit volumes from another container.`);
-    if (Array.isArray(service?.extra_hosts) && service.extra_hosts.some((entry) => /host-gateway/i.test(String(entry)))) throw new Error(`${prefix} cannot map the Docker host gateway.`);
-    for (const option of Array.isArray(service?.security_opt) ? service.security_opt : []) {
-      if (/unconfined|label\s*[:=]\s*disable/i.test(String(option))) throw new Error(`${prefix} cannot disable container security profiles.`);
-    }
-    if (String(service?.build?.network || '').trim().toLowerCase() === 'host') throw new Error(`${prefix} cannot use host networking while building.`);
-    if (Array.isArray(service?.build?.entitlements) && service.build.entitlements.length) throw new Error(`${prefix} cannot request privileged build entitlements.`);
-    for (const volume of service?.volumes || []) {
-      const source = typeof volume === 'string' ? volume.split(':')[0] : volume?.source;
-      const type = typeof volume === 'object' ? String(volume?.type || '') : (/^(?:\.?\.?\/|\/|[A-Za-z]:[\\/])/.test(String(source || '')) ? 'bind' : 'volume');
-      if (type === 'bind') throw new Error(`${prefix} cannot use host bind mounts. Use named volumes instead.`);
-      if (String(source || '').includes('docker.sock')) throw new Error(`${prefix} cannot mount the Docker socket.`);
-    }
+    composeServicePolicy(name, service, config);
     const ports = Array.isArray(service?.ports) ? service.ports : [];
     if (name !== serviceName && ports.length) throw new Error(`${prefix} cannot publish host ports; auxiliary services must stay on the Compose network.`);
     if (name === serviceName && ports.length) {
@@ -407,6 +550,8 @@ class SiteManager extends DeliverySiteManager {
       const bindHost = String(site.bind_host || '').toLowerCase();
       const loopbackTarget = targetHost === 'localhost' || targetHost === '::1' || /^127(?:\.\d{1,3}){3}$/.test(targetHost);
       if (targetPort === Number(site.port) && (loopbackTarget || (bindHost && targetHost === bindHost))) throw new Error('Reverse proxy target points back to this site listener.');
+      // Re-checked at launch so targets saved before this rule still cannot start.
+      assertSafeProxyTarget(target);
       return { driver: 'proxy', target: target.href, spec, site, active: false, stopping: false };
     }
     if (spec.driver === 'process') return this.launchProcessBackend(site, spec, root, options);
@@ -489,6 +634,7 @@ class SiteManager extends DeliverySiteManager {
       this.applyHeaders(activeSite, res, req);
       const options = { target: active.target };
       if (active.driver === 'proxy' && activeSite.proxy_host_header) options.headers = { Host: activeSite.proxy_host_header };
+      sanitizeCloudflareHeaders(activeSite, req);
       proxy.web(req, res, options);
     };
     const created = this.publicServer(site, handler);
@@ -506,6 +652,7 @@ class SiteManager extends DeliverySiteManager {
       socket.once('close', () => runtime.webSockets.delete(socket));
       const options = { target: active.target };
       if (active.driver === 'proxy' && runtime.site.proxy_host_header) options.headers = { Host: runtime.site.proxy_host_header };
+      sanitizeCloudflareHeaders(runtime.site, req);
       proxy.ws(req, socket, head, options);
     });
     return runtime;
@@ -526,19 +673,23 @@ class SiteManager extends DeliverySiteManager {
     });
     const targetFor = () => runtime.backend?.additionalListeners?.find((item) => item.name === listener.name)?.target || '';
     gateway.server = require('node:http').createServer((req, res) => {
+      if (isWorkloadAddress(req.socket.remoteAddress)) return res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' }).end(WORKLOAD_FORBIDDEN_BODY);
       const target = targetFor();
       if (!target) return res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Private listener is not available.');
       this.applyHeaders(runtime.site, res, req);
+      sanitizeCloudflareHeaders(runtime.site, req);
       proxy.web(req, res, { target });
     });
     gateway.server.requestTimeout = HTTP_REQUEST_TIMEOUT_MS;
     gateway.server.headersTimeout = Math.min(60_000, HTTP_REQUEST_TIMEOUT_MS);
     gateway.server.keepAliveTimeout = 5000;
     gateway.server.on('upgrade', (req, socket, head) => {
+      if (isWorkloadAddress(req.socket.remoteAddress)) return socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       const target = targetFor();
       if (!target) return socket.destroy();
       gateway.webSockets.add(socket);
       socket.once('close', () => gateway.webSockets.delete(socket));
+      sanitizeCloudflareHeaders(runtime.site, req);
       proxy.ws(req, socket, head, { target });
     });
     return gateway;
@@ -1009,4 +1160,4 @@ class SiteManager extends DeliverySiteManager {
   }
 }
 
-module.exports = { SiteManager, composeRuntimePolicy, validateComposeProjectPaths };
+module.exports = { SiteManager, composeRuntimePolicy, validateComposeProjectPaths, composeReferencedPaths };

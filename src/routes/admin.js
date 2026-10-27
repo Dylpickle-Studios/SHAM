@@ -1,6 +1,9 @@
 'use strict';
 
 const { validateManifest } = require('../plugin-manager');
+const { exportRecoveryKeyring } = require('../secret-store');
+const { UPDATE_TRUSTED_KEYS_SETTING } = require('../update-manager');
+const { normalizeTrustedKeys } = require('../plugin-signing');
 
 function registerAdminRoutes(ctx) {
   const {
@@ -135,6 +138,58 @@ app.get('/api/plugins', requireAuth, (req, res) => res.json({
       recordAudit(req.user.id, 'security.master-key.rotate');
       res.json(result);
     } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+
+  // Backups no longer carry key material; this is the operator's offline copy for disaster recovery.
+  app.post('/api/admin/security/recovery-key', requireAuth, requireAdmin, stepUpLimiter, async (req, res) => {
+    if (req.authType !== 'session') return res.status(403).json({ error: 'Export the recovery key from an authenticated browser session.' });
+    try {
+      const user = db.prepare('SELECT password_hash, password_salt FROM users WHERE id = ? AND active = 1').get(req.user.id);
+      if (!user || !(await verifyPassword(String(req.body?.password || ''), user.password_salt, user.password_hash))) return res.status(401).json({ error: 'Password confirmation failed.' });
+      const result = exportRecoveryKeyring();
+      recordAudit(req.user.id, 'security.recovery-key.export', { external: result.external, exported: Boolean(result.keyring) });
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({
+        ...result,
+        filename: '.master-keyring.json',
+        message: result.external
+          ? 'The active master key is supplied by SHAM_MASTER_KEY; store that value offline. Any keyring shown here holds additional decrypt-only keys merged from restored backups.'
+          : 'Store this keyring offline. Install it as .master-keyring.json in the data directory of a replacement host before restoring a backup.'
+      });
+    } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+
+  const updateTrustedKeys = () => normalizeTrustedKeys(getSetting(UPDATE_TRUSTED_KEYS_SETTING, '[]'));
+  app.get('/api/admin/update-trusted-keys', requireAuth, requireAdmin, (_req, res) => res.json({ keys: updateTrustedKeys() }));
+
+  app.post('/api/admin/update-trusted-keys', requireAuth, requireAdmin, (req, res) => {
+    try {
+      const id = String(req.body?.id || '').trim();
+      const name = String(req.body?.name || id).trim();
+      const publicKey = String(req.body?.publicKey || '').trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/.test(id)) throw new Error('Trusted update key ID must be 1–100 letters, numbers, dots, colons, underscores, or hyphens.');
+      if (name.length > 100 || /[\r\n\0]/.test(name)) throw new Error('Trusted update key name is invalid or too long.');
+      if (!publicKey.includes('PUBLIC KEY') || publicKey.length > 4096) throw new Error('Trusted update keys need a PEM publicKey.');
+      let parsed;
+      try { parsed = crypto.createPublicKey(publicKey); } catch { throw new Error(`Trusted update key “${id}” is not a valid public key.`); }
+      if (parsed.asymmetricKeyType !== 'ed25519') throw new Error('SHAM update signatures use Ed25519 keys.');
+      const keys = updateTrustedKeys();
+      if (keys.some((entry) => entry.id === id)) throw new Error(`A trusted update key with ID “${id}” already exists.`);
+      if (keys.length >= 100) throw new Error('At most 100 trusted update keys can be configured.');
+      keys.push({ id, name: name || id, publicKey });
+      setSetting(UPDATE_TRUSTED_KEYS_SETTING, JSON.stringify(keys));
+      recordAudit(req.user.id, 'update.trusted-key.add', { id });
+      res.status(201).json({ keys });
+    } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+
+  app.delete('/api/admin/update-trusted-keys/:id', requireAuth, requireAdmin, (req, res) => {
+    const keys = updateTrustedKeys();
+    const remaining = keys.filter((entry) => entry.id !== String(req.params.id));
+    if (remaining.length === keys.length) return res.status(404).json({ error: 'Trusted update key not found.' });
+    setSetting(UPDATE_TRUSTED_KEYS_SETTING, JSON.stringify(remaining));
+    recordAudit(req.user.id, 'update.trusted-key.remove', { id: String(req.params.id) });
+    res.json({ keys: remaining });
   });
 
   app.put('/api/admin/settings/oidc', requireAuth, requireAdmin, (req, res) => {

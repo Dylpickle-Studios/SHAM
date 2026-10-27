@@ -5,6 +5,9 @@ const { DATA_DIR } = require('./config');
 
 const KEYRING_PATH = path.join(DATA_DIR, '.master-keyring.json');
 const ENCRYPTED_PREFIX = 'enc:v1:';
+// Retired keys stay decrypt-only so backups taken before a rotation (which no
+// longer carry key material) can still be restored on this host.
+const MAX_PREVIOUS_KEYS = 16;
 
 /** @typedef {{ active: Buffer, previous: Buffer[], external: boolean }} Keyring */
 
@@ -35,21 +38,33 @@ function writeKeyring(value) {
   try { fs.chmodSync(KEYRING_PATH, 0o600); } catch { /* Read-only or non-POSIX storage. */ }
 }
 
+function readKeyringFile() {
+  if (!fs.existsSync(KEYRING_PATH)) return null;
+  const parsed = JSON.parse(fs.readFileSync(KEYRING_PATH, 'utf8'));
+  const active = decodeConfiguredKey(parsed.active);
+  if (!active) throw new Error(`${KEYRING_PATH} does not contain an active key.`);
+  const previous = (Array.isArray(parsed.previous) ? parsed.previous : []).map(decodeConfiguredKey).filter(Boolean).slice(0, MAX_PREVIOUS_KEYS);
+  try { fs.chmodSync(KEYRING_PATH, 0o600); } catch { /* Best effort. */ }
+  return { active, previous };
+}
+
 /** @returns {Keyring} */
 function loadKeyring() {
   if (keyring) return keyring;
   const configured = decodeConfiguredKey(process.env.SHAM_MASTER_KEY);
   if (configured) {
-    keyring = { active: configured, previous: [], external: true };
+    // A keyring file merged in by a restore still holds decrypt-only keys for that backup's database.
+    /** @type {{ active: Buffer, previous: Buffer[] } | null} */
+    let stored = null;
+    try { stored = readKeyringFile(); } catch { /* The configured key alone still decrypts its own data. */ }
+    const previous = stored ? [stored.active, ...stored.previous].filter((key) => !key.equals(configured)) : [];
+    keyring = { active: configured, previous, external: true };
     return keyring;
   }
 
-  if (fs.existsSync(KEYRING_PATH)) {
-    const parsed = JSON.parse(fs.readFileSync(KEYRING_PATH, 'utf8'));
-    const active = decodeConfiguredKey(parsed.active);
-    const previous = (Array.isArray(parsed.previous) ? parsed.previous : []).map(decodeConfiguredKey).filter(Boolean).slice(0, 2);
-    keyring = { active, previous, external: false };
-    try { fs.chmodSync(KEYRING_PATH, 0o600); } catch { /* Best effort. */ }
+  const stored = readKeyringFile();
+  if (stored) {
+    keyring = { ...stored, external: false };
     return keyring;
   }
 
@@ -57,6 +72,48 @@ function loadKeyring() {
   writeKeyring({ active: serializeKey(active), previous: [] });
   keyring = { active, previous: [], external: false };
   return keyring;
+}
+
+function uniqueKeys(keys) {
+  const seen = new Set();
+  return keys.filter((key) => { const id = key.toString('hex'); if (seen.has(id)) return false; seen.add(id); return true; });
+}
+
+function parseKeyringJson(text) {
+  let parsed;
+  try { parsed = JSON.parse(String(text || '')); } catch { throw new Error('Keyring material is not valid JSON.'); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Keyring material must be a JSON object.');
+  const active = decodeConfiguredKey(parsed.active);
+  if (!active) throw new Error('Keyring material does not contain an active key.');
+  if (parsed.previous !== undefined && !Array.isArray(parsed.previous)) throw new Error('Keyring previous keys must be an array.');
+  return { active, previous: (parsed.previous || []).map(decodeConfiguredKey).filter(Boolean) };
+}
+
+/**
+ * Adds every key from another keyring (for example one carried by an older backup
+ * archive) as a decrypt-only key, without changing this host's active key.
+ * @param {string} text
+ */
+function mergeKeyringMaterial(text) {
+  const incoming = parseKeyringJson(text);
+  const current = readKeyringFile();
+  const next = current
+    ? { active: current.active, previous: uniqueKeys([incoming.active, ...incoming.previous, ...current.previous]).filter((key) => !key.equals(current.active)) }
+    : { active: incoming.active, previous: uniqueKeys(incoming.previous).filter((key) => !key.equals(incoming.active)) };
+  writeKeyring({ active: serializeKey(next.active), previous: next.previous.slice(0, MAX_PREVIOUS_KEYS).map(serializeKey) });
+  keyring = null;
+  return { added: next.previous.length - (current?.previous.length || 0) };
+}
+
+/** Keyring material an operator stores offline to restore backups on a replacement host. */
+function exportRecoveryKeyring() {
+  const ring = loadKeyring();
+  // With SHAM_MASTER_KEY the operator already holds the active key; only a restore-merged file adds to it.
+  const stored = ring.external ? readKeyringFile() : ring;
+  return {
+    external: ring.external,
+    keyring: stored ? { format: 'sham-master-keyring-v1', active: serializeKey(stored.active), previous: stored.previous.map(serializeKey) } : null
+  };
 }
 
 function isEncrypted(value) {
@@ -173,8 +230,9 @@ function rotateMasterKey(db) {
   const ring = loadKeyring();
   if (ring.external) throw new Error('Master-key rotation is controlled by SHAM_MASTER_KEY. Rotate the environment secret and restart using an overlapping keyring migration procedure.');
   const next = crypto.randomBytes(32);
-  writeKeyring({ active: serializeKey(next), previous: [serializeKey(ring.active), ...ring.previous.map(serializeKey)].slice(0, 2) });
-  keyring = { active: next, previous: [ring.active, ...ring.previous].slice(0, 2), external: false };
+  const retired = uniqueKeys([ring.active, ...ring.previous]).slice(0, MAX_PREVIOUS_KEYS);
+  writeKeyring({ active: serializeKey(next), previous: retired.map(serializeKey) });
+  keyring = { active: next, previous: retired, external: false };
 
   const transaction = db.transaction(() => {
     for (const row of db.prepare('SELECT key, value FROM settings').all()) {
@@ -204,18 +262,17 @@ function rotateMasterKey(db) {
     }
   });
 
-  // If any of this throws, the keyring file on disk still has the previous
-  // key (only written below on success), so either key version remains
-  // decryptable after a crash — nothing further to do here but propagate.
+  // The retired keys stay in `previous` both during and after the transaction:
+  // a crash leaves every row decryptable, and backups taken before this
+  // rotation (which do not carry key material) remain restorable.
   transaction();
-  writeKeyring({ active: serializeKey(next), previous: [] });
-  keyring = { active: next, previous: [], external: false };
   return { rotatedAt: new Date().toISOString() };
 }
 
 module.exports = {
   ENCRYPTED_PREFIX,
   KEYRING_PATH,
+  MAX_PREVIOUS_KEYS,
   isEncrypted,
   encrypt,
   decrypt,
@@ -224,5 +281,7 @@ module.exports = {
   getSecretSetting,
   setSecretSetting,
   migrateKnownSecrets,
-  rotateMasterKey
+  rotateMasterKey,
+  mergeKeyringMaterial,
+  exportRecoveryKeyring
 };

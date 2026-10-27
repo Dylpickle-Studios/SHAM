@@ -110,7 +110,7 @@ test('cloudflared receives the token through its environment, not argv', async (
   const { manager, spawns, children } = createHarness(new FakeSettingsStore({ enabled: true, token }));
   await manager.start();
   assert.equal(spawns.length, 1);
-  assert.deepEqual(spawns[0].args, ['tunnel', '--no-autoupdate', 'run']);
+  assert.deepEqual(spawns[0].args, ['tunnel', '--no-autoupdate', '--metrics', '127.0.0.1:0', 'run']);
   assert.equal(spawns[0].options.env.TUNNEL_TOKEN, token);
   assert.doesNotMatch(spawns[0].args.join(' '), /eyJ-cloudflare-token/);
   children[0].stderr.write('INF Registered tunnel connection connIndex=0\n');

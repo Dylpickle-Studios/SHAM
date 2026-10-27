@@ -33,6 +33,30 @@ function registerSiteRoutes(ctx) {
     const conflict = findActiveEdgeDomain.get(config.domain, Number(siteId) || 0);
     if (conflict) throw new Error(`Domain ${config.domain} is already routed by enabled edge site “${conflict.name}”. Disable its edge route or choose a different domain.`);
   };
+  // Non-admins must never make SHAM run code or commands they chose. Only
+  // static and proxy sites leave site content inert, and an enabled sham.yaml
+  // can switch even those onto a process driver.
+  const CODE_RUNTIMES = new Set(['node', 'process', 'container', 'compose']);
+  const EXECUTION_FIELDS = ['start_command', 'install_command', 'build_command', 'readiness_command', 'health_check_command', 'install_dependencies', 'git_url', 'git_branch'];
+  const runtimeExecutesCode = (site) => CODE_RUNTIMES.has(site.runtime_type) || site.runtime_isolation === 'docker';
+  const siteExecutesCode = (site) => runtimeExecutesCode(site) || Boolean(site.manifest_enabled);
+  const adminRequired = (message) => Object.assign(new Error(message), { status: 403 });
+  const assertMayConfigureExecution = (req, config, existing = null) => {
+    if (req.user?.role === 'admin') return;
+    if (runtimeExecutesCode(config) || (existing && runtimeExecutesCode(existing))) throw adminRequired('Runtimes that execute code (Node.js, managed process, container, Compose) require an administrator account.');
+    const baseline = existing || { git_branch: 'main', install_dependencies: false };
+    const changed = EXECUTION_FIELDS.filter((field) => String(config[field] ?? '') !== String(baseline[field] ?? ''));
+    if (changed.length) throw adminRequired(`Only an administrator can change command, dependency-install, or Git settings (${changed.join(', ')}).`);
+    // A user may switch an administrator's sham.yaml off, never on.
+    config.manifest_enabled = Boolean(existing?.manifest_enabled) && Boolean(config.manifest_enabled);
+  };
+  const denyUnlessMayChangeCode = (req, res, site) => {
+    if (req.user?.role === 'admin' || !siteExecutesCode(site)) return false;
+    res.status(403).json({ error: runtimeExecutesCode(site)
+      ? 'Changing the files of a site whose runtime executes code requires an administrator account.'
+      : 'This site applies sham.yaml runtime manifests, which can run commands. Turn off “Allow a reviewed sham.yaml” in the site settings, or ask an administrator, before changing its files.' });
+    return true;
+  };
   const assertTunnelOnlyBinding = (config, siteId) => {
     if (!['0.0.0.0', '::'].includes(String(config.bind_host || ''))) return;
     const tunnelOnly = db.prepare('SELECT 1 FROM site_cloudflare_tunnels WHERE site_id = ? AND tunnel_only = 1').get(siteId);
@@ -273,8 +297,9 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
       const source = config.runtime_type === 'proxy' ? 'proxy' : String(req.body.source || 'upload').toLowerCase();
       if (!['upload', 'git', 'image', 'proxy'].includes(source)) throw new Error('Deployment source must be upload, git, image, or proxy.');
       if (source === 'image' && !(config.runtime_type === 'container' && config.container_mode === 'image')) throw new Error('Docker image sources require the Container runtime with Existing OCI image mode.');
-      if (source === 'git' && req.user.role !== 'admin') throw new Error('Git deployments require an administrator account.');
-      if ((config.runtime_type === 'compose' || config.runtime_type === 'container' || config.runtime_isolation === 'docker' || config.anubis_enabled) && req.user.role !== 'admin') throw new Error('Docker-backed runtimes require an administrator account.');
+      if (source === 'git' && req.user.role !== 'admin') throw adminRequired('Git deployments require an administrator account.');
+      if ((config.runtime_type === 'compose' || config.runtime_type === 'container' || config.runtime_isolation === 'docker' || config.anubis_enabled) && req.user.role !== 'admin') throw adminRequired('Docker-backed runtimes require an administrator account.');
+      assertMayConfigureExecution(req, config);
       if (source === 'git' && !config.git_url) throw new Error('Choose a Git repository before deploying from Git.');
       checkPort(config.port);
       checkAdditionalListenerPorts(config.additional_listeners);
@@ -481,7 +506,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
         try { await fs.promises.rm(destination, { recursive: true, force: true }); }
         catch (cleanupError) { manager.log(createdId, 'error', `Could not remove failed site deployment: ${cleanupError.message}`); }
       }
-      res.status(400).json({ error: error.message });
+      res.status(error.status || 400).json({ error: error.message });
     }
   });
 
@@ -497,8 +522,9 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
       if (input.port === '' && bool(input.edgeEnabled ?? input.edge_enabled, Boolean(site.edge_enabled))) input.port = site.port;
       const config = validateSiteInput(input, site);
       if ((config.runtime_type === 'compose' || config.runtime_type === 'container' || config.runtime_isolation === 'docker' || config.anubis_enabled) && req.user.role !== 'admin') {
-        throw new Error('Docker-backed runtime settings require an administrator account.');
+        throw adminRequired('Docker-backed runtime settings require an administrator account.');
       }
+      assertMayConfigureExecution(req, config, site);
       checkPort(config.port, site.id);
       checkAdditionalListenerPorts(config.additional_listeners, site.id);
       assertEdgeDomainAvailable(config, site.id);
@@ -545,7 +571,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
       if (updated.obfuscate && !site.obfuscate) warnings.push(await safeObfuscationWarning(updated));
       res.json({ site: manager.decorate(updated), warning: warnings.join(' ') || null });
     } catch (error) {
-      res.status(400).json({ error: error.message });
+      res.status(error.status || 400).json({ error: error.message });
     }
   });
 
@@ -626,7 +652,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
 
   app.post('/api/sites/:id/npm-install', requireAuth, async (req, res) => {
     const site = getSiteOr404(req, res);
-    if (!site) return;
+    if (!site || denyUnlessMayChangeCode(req, res, site)) return;
     const wasRunning = manager.statusFor(site.id).running;
     const fresh = bool(req.body?.fresh, false);
     let rollbackSnapshot;
@@ -664,6 +690,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
     const site = getSiteOr404(req, res);
     if (!site) return;
     if (site.runtime_type === 'proxy') return res.status(400).json({ error: 'Reverse-proxy sites do not have deployable project files.' });
+    if (denyUnlessMayChangeCode(req, res, site)) return;
     const wasRunning = manager.statusFor(site.id).running;
     let rollbackSnapshot;
     try {
@@ -727,7 +754,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
 
   app.put('/api/sites/:id/files/content', requireAuth, async (req, res) => {
     const site = getSiteOr404(req, res);
-    if (!site) return;
+    if (!site || denyUnlessMayChangeCode(req, res, site)) return;
     try {
       const result = await writeTextFileAsync(site, req.body.path, req.body.content);
       recordAudit(req.user.id, 'site.file.write', { id: site.id, path: result.path, size: result.size });
@@ -737,7 +764,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
 
   app.put('/api/sites/:id/files/upload', requireAuth, uploadSizeGuard, multipart(receiveSingleFile), async (req, res) => {
     const site = getSiteOr404(req, res);
-    if (!site) return;
+    if (!site || denyUnlessMayChangeCode(req, res, site)) return;
     try {
       if (!req.file) throw new Error('Choose one file to upload.');
       const destination = req.body.path || req.file.originalname;
@@ -749,7 +776,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
 
   app.delete('/api/sites/:id/files', requireAuth, async (req, res) => {
     const site = getSiteOr404(req, res);
-    if (!site) return;
+    if (!site || denyUnlessMayChangeCode(req, res, site)) return;
     const wasRunning = manager.statusFor(site.id).running;
     let stagedDeletion = null;
     let rollbackSnapshot = null;
@@ -884,7 +911,7 @@ app.get('/api/sites', requireAuth, (_req, res) => res.json({ sites: siteRows().m
 
   app.post('/api/sites/:id/snapshots/:snapshotId/restore', requireAuth, async (req, res) => {
     const site = getSiteOr404(req, res);
-    if (!site) return;
+    if (!site || denyUnlessMayChangeCode(req, res, site)) return;
     const wasRunning = manager.statusFor(site.id).running;
     let rollbackSnapshot;
     try {

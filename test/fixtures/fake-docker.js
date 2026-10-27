@@ -100,7 +100,7 @@ if (command === 'network') {
   const sub = args[1];
   if (sub === 'inspect') {
     const name = args[2];
-    if (state.networks[name]) { process.stdout.write('[{}]\n'); process.exit(0); }
+    if (state.networks[name]) { process.stdout.write(`${JSON.stringify([state.networks[name] === true ? {} : state.networks[name]])}\n`); process.exit(0); }
     process.exit(1);
   }
   if (sub === 'create') {
@@ -152,9 +152,29 @@ if (command === 'ps') {
   process.exit(0);
 }
 
+// Compose support is limited to pre-normalized JSON project files: `config`
+// echoes the first -f file back, every other subcommand is recorded so tests
+// can assert exactly which model file Compose was pointed at.
 if (command === 'compose') {
-  process.stderr.write('fake docker: compose not supported in this fixture\n');
-  process.exit(1);
+  const options = { files: [], project: '', projectDirectory: '' };
+  let index = 1;
+  for (; index < args.length; index += 1) {
+    if (args[index] === '-f') options.files.push(args[++index]);
+    else if (args[index] === '-p') options.project = args[++index];
+    else if (args[index] === '--project-directory') options.projectDirectory = args[++index];
+    else if (args[index] === '--env-file') index += 1;
+    else break;
+  }
+  const sub = args[index];
+  if (!options.files[0]?.endsWith('.json')) { process.stderr.write('fake docker: only JSON compose files are supported\n'); process.exit(1); }
+  const model = JSON.parse(fs.readFileSync(options.files[0], 'utf8'));
+  state.composeCalls ||= [];
+  state.composeCalls.push({ sub, args: args.slice(index), ...options, model: sub === 'config' ? undefined : model });
+  saveState(state);
+  if (sub === 'config') { process.stdout.write(JSON.stringify({ ...model, name: options.project || model.name || 'fake' })); process.exit(0); }
+  if (sub === 'ps') { process.stdout.write('cid-compose\n'); process.exit(0); }
+  if (sub === 'port') { process.stdout.write('127.0.0.1:45678\n'); process.exit(0); }
+  process.exit(0);
 }
 
 process.stderr.write(`fake docker: unhandled command ${command}\n`);

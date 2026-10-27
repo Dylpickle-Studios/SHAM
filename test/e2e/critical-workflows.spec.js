@@ -1,7 +1,7 @@
 'use strict';
 
 const { test, expect } = require('@playwright/test');
-const { ShamHarness } = require('../integration/harness');
+const { ShamHarness, SETUP_TOKEN } = require('../integration/harness');
 
 let sham;
 const username = 'browser-admin';
@@ -47,6 +47,8 @@ test('first-run setup creates an administrator and opens the dashboard', async (
   await expect(page.locator('#auth-title')).toHaveText('Create administrator');
   await page.locator('#auth-username').fill(username);
   await page.locator('#auth-password').fill(password);
+  await expect(page.locator('#auth-setup-token')).toBeVisible();
+  await page.locator('#auth-setup-token').fill(SETUP_TOKEN);
   await page.locator('#auth-submit').click();
   await expect(page.locator('#auth-view')).toBeHidden();
   await expect(page.locator('#setup-dialog')).toBeVisible();

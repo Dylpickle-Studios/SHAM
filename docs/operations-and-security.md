@@ -50,6 +50,16 @@ SHAM supports configured local/off-host backup destinations including workflows 
 
 Back up the full SHAM data directory independently of per-site snapshots.
 
+Backup archives deliberately **do not contain key material**: `.master-keyring.json` (the key that encrypts saved secrets in `sham.db`), `.jwt-secret`, and `.setup-token` are excluded, as is `app-runtime/` (the running application release). An archive copied to S3, SFTP, Restic, or an external directory therefore cannot be decrypted on its own. Keep an offline copy of the recovery key so backups remain restorable after losing the host:
+
+1. In a browser session, call `POST /api/admin/security/recovery-key` with `{ "password": "<your password>" }` (administrator only, password step-up, audited, `Cache-Control: no-store`). API tokens cannot export it.
+2. Store the returned `keyring` JSON somewhere separate from the backups, such as a password manager or offline media. Export it again after every master-key rotation.
+3. When `SHAM_MASTER_KEY` is set, store that environment value instead; the response then only lists additional decrypt-only keys merged from older backups (if any).
+
+Master-key rotation keeps up to 16 retired keys as decrypt-only keys so backups taken before a rotation can still be restored on the same host.
+
+Before writing the backup archive, SHAM walks the data directory without following links and leaves out symbolic links that the restore validator would reject (absolute targets, targets escaping the archive, cycles) and FIFOs/devices. These usually come from site code or Git repositories under `site-data/` or `releases/`. Skipped paths are logged as a warning (skipping needs GNU tar, as shipped in the container image); the archive itself is still verified strictly before the backup is recorded as successful.
+
 ## Restore safety
 
 Restore is intentionally staged:
@@ -64,12 +74,23 @@ Restore is intentionally staged:
 8. Run `PRAGMA quick_check`.
 9. Verify core SHAM tables.
 10. Journal and rename the validated top-level entries within the volume; the mounted data directory itself stays in place.
-11. Preserve backup/update stores and the current Runtime Agent socket/token directory.
+11. Preserve backup/update stores, the current Runtime Agent socket/token directory, `app-runtime/` (so a restore never rolls back the running SHAM code), and this host's key material (`.master-keyring.json`, `.jwt-secret`, `.setup-token`). Archives made by earlier releases still contain a keyring; its keys are merged into this host's keyring as decrypt-only keys so the restored database stays readable, while the host keeps its own active key. Restored sessions are signed with this host's JWT secret, so everyone signs in again after a restore.
 12. Recover interrupted swaps from the journal on the next startup, then release the agent pause.
 
 Backup creation uses the same archive validator before recording success. Dependency symlinks such as `node_modules/.bin` are preserved without following them into external files. Runtime Agent credentials and restore work files are excluded from new archives.
 
 Restore requires the updated control plane and Runtime Agent to be deployed together. If an active agent cannot pause, restore stops before modifying live data. Keep `.restore-work` intact if startup reports an incomplete rollback; retry startup to finish recovery. Container workloads are stopped for the restore and reconciled from the restored configuration when SHAM starts. Native deployments also require the previous SHAM process to be stopped before starting the restore bootstrap.
+
+### Restoring on a replacement host
+
+The in-app restore works on archives recorded by the same instance. To rebuild on a new host:
+
+1. Install SHAM but keep it stopped (stop it again if it was already started), and make sure `SHAM_DATA_PATH` is empty.
+2. Extract the archive as the SHAM user: `tar -xzf sham-backup-<timestamp>.tar.gz -C "$SHAM_DATA_PATH"`.
+3. Save the exported recovery keyring as `$SHAM_DATA_PATH/.master-keyring.json` with mode `0600`; the exported JSON can be written as-is. If the old host used `SHAM_MASTER_KEY`, set the same value instead.
+4. Start SHAM and sign in. A new JWT secret is generated, so earlier sessions and the setup token are not carried over.
+
+Without the recovery key, the database opens but saved secrets (Git/Cloudflare tokens, secret environment values, TOTP seeds, backup credentials, and so on) cannot be decrypted and must be re-entered.
 
 ## Snapshots vs backups
 
@@ -253,6 +274,16 @@ Recommendations:
 
 Server-side JavaScript plugins are trusted code. Worker isolation helps contain event-loop failure/blocking but is not an OS sandbox.
 
+Worker-isolated (`"isolation": "worker"`) plugins run in a separate V8 context that holds no host objects: the plugin API, timers, `console`, `fetch` (with `network:outbound`), and a small `crypto` shim are implemented inside that context and exchange only JSON strings with SHAM. Plugin code cannot `require` Node.js modules. In-process plugins (`"isolation": "in-process"`) are loaded with Node's `require` and have the full authority of the SHAM process.
+
+Plugin SQL (`data:read`/`data:write` in JavaScript plugins and declarative `queries`) is checked by compiling each statement and inspecting the program SQLite will execute:
+
+- Reads are limited to non-sensitive core tables (`sites` with a column allowlist that excludes `git_url`, build/start/health commands, headers, firewall, and other policy fields; `site_stats`; `site_daily_stats`; `site_performance_samples`; `performance_samples`) and the plugin's own tables.
+- Writes and `CREATE TABLE`/`CREATE INDEX`/`DROP`/`ALTER TABLE` are limited to the plugin's own tables, named `plugin_<id>_…` with `-` in the plugin ID replaced by `_`.
+- `ATTACH`, `DETACH`, `PRAGMA`, `VACUUM`, transactions, triggers, views, virtual tables and table-valued functions, temporary objects, SQLite internal tables, and dangerous functions are rejected.
+
+Declarative read actions are available to every signed-in dashboard user (writes need an administrator); with this allowlist they can only return the data listed above.
+
 Only install reviewed plugins. Use signatures/trusted signing keys where appropriate.
 
 The Plugin playground validates manifests and previews browser code in a sandboxed iframe; it intentionally never executes server plugin code.
@@ -260,6 +291,12 @@ The Plugin playground validates manifests and previews browser code in a sandbox
 ## SHAM update trust boundary
 
 The in-app updater accepts reviewed update archives, supports publisher signature verification, and keeps active application releases beneath persistent data storage.
+
+Update signatures are verified only against the **trusted update keys** (`update_trusted_keys_json`), a trust store separate from plugin publisher keys. Manage it with `GET`/`POST /api/admin/update-trusted-keys` (`{ "id", "name", "publicKey" }`, Ed25519 PEM) and `DELETE /api/admin/update-trusted-keys/:id`. An archive signed by a key outside that store (including a plugin publisher key) is treated like an unsigned archive and needs the explicit unsigned-update acknowledgement.
+
+Updates must be newer than the running version under semantic-versioning precedence (prereleases sort before their release). Re-installing the same version or downgrading requires an explicit `allowDowngrade` acknowledgement so an old, validly signed release cannot be replayed to reintroduce fixed vulnerabilities.
+
+**Upgrade note:** earlier releases verified core updates against the plugin trusted keys. Those keys are not copied over; add your SHAM release signing key under trusted update keys before staging the next signed update.
 
 Updates that change runtime dependency declarations are rejected by the in-app code update path and should be delivered through a reviewed image/manual dependency-aware upgrade.
 

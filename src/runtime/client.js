@@ -242,6 +242,8 @@ class RuntimeClient {
   // ---- Networks ----
   ensureNetwork({ name, internal = true }) { return this.request(OPERATIONS.NETWORKS_ENSURE, { body: { name, internal } }); }
   connectNetwork({ network, containerId, alias }) { return this.request(OPERATIONS.NETWORKS_CONNECT, { body: { network, containerId, alias } }); }
+  /** @returns {Promise<{ networks: Array<{ name: string, subnets: string[], gateways?: string[] }> }>} */
+  networkSubnets() { return this.request(OPERATIONS.NETWORKS_SUBNETS, { body: {} }); }
 
   // ---- Compose ----
   composeConfig({ files, cwd, env, service, containerPort }) { return this.request(OPERATIONS.COMPOSE_CONFIG, { body: { files, cwd, env, service, containerPort } }); }

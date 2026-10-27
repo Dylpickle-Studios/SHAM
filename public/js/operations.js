@@ -347,6 +347,7 @@ function renderOperationsInstance(payload) {
   $('#update-status').className = `badge ${pending ? 'warning' : 'success'}`;
   $('#update-detail').textContent = pending ? `Version ${pending.version || 'unknown'} is staged. Restart SHAM to apply it.` : 'No update is staged.';
   $('#cancel-update').disabled = !pending;
+  loadUpdateKeys();
 
   const capabilities = payload.capabilities || {};
   const items = [
@@ -1008,11 +1009,59 @@ $('#update-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const file = $('#update-archive').files[0];
   if (!file) return;
-  const formData = new FormData(); formData.append('archive', file, file.name); formData.append('allowUnsigned', String($('#update-allow-unsigned').checked));
+  const password = await requestAction({ title: 'Stage SHAM update?', message: 'The uploaded release replaces SHAM on the next process restart. Confirm your password to continue.', confirmLabel: 'Stage update', danger: true, inputLabel: 'Password', inputType: 'password', autocomplete: 'current-password' });
+  if (!password) return;
+  const formData = new FormData(); formData.append('password', password); formData.append('allowUnsigned', String($('#update-allow-unsigned').checked)); formData.append('allowDowngrade', String($('#update-allow-downgrade').checked)); formData.append('archive', file, file.name);
   const button = $('#update-form button[type="submit"]');
   setBusy(button, true, 'Validating…');
-  try { const result = await api('/api/admin/update', { method: 'POST', body: formData }); toast(result.message, 'warning'); $('#update-archive').value = ''; $('#update-allow-unsigned').checked = false; await loadOperations(); }
+  try { const result = await api('/api/admin/update', { method: 'POST', body: formData }); toast(result.message, 'warning'); $('#update-archive').value = ''; $('#update-allow-unsigned').checked = false; $('#update-allow-downgrade').checked = false; await loadOperations(); }
   catch (error) { toast(error.message, 'error'); }
+  finally { setBusy(button, false); }
+});
+function renderUpdateKeys(keys) {
+  $('#update-key-list').innerHTML = keys.length ? keys.map((key) => `<div class="event-item text-event" data-update-key-id="${escapeHtml(key.id)}"><div><strong>${escapeHtml(key.name || key.id)}</strong><span>${escapeHtml(key.id)}</span></div><button class="button danger" data-remove-update-key type="button">Remove</button></div>`).join('') : '<p class="muted">No update signing keys are trusted. Signed updates are treated as unsigned until a key is added.</p>';
+}
+
+async function loadUpdateKeys() {
+  try { renderUpdateKeys((await api('/api/admin/update-trusted-keys')).keys || []); }
+  catch (error) { $('#update-key-list').innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`; }
+}
+
+$('#update-key-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = $('#update-key-form button[type="submit"]');
+  setBusy(button, true, 'Adding…');
+  try {
+    const result = await api('/api/admin/update-trusted-keys', { method: 'POST', body: { id: $('#update-key-id').value.trim(), name: $('#update-key-name').value.trim(), publicKey: $('#update-key-pem').value.trim() } });
+    renderUpdateKeys(result.keys || []);
+    $('#update-key-form').reset();
+    toast('Trusted update key added.');
+  } catch (error) { toast(error.message, 'error'); }
+  finally { setBusy(button, false); }
+});
+$('#update-key-list').addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-remove-update-key]');
+  if (!button) return;
+  const id = button.closest('[data-update-key-id]').dataset.updateKeyId;
+  if (!(await requestAction({ title: 'Remove trusted update key?', message: `Updates signed only by “${id}” will be treated as unsigned.`, confirmLabel: 'Remove key', danger: true }))) return;
+  try { renderUpdateKeys((await api(`/api/admin/update-trusted-keys/${encodeURIComponent(id)}`, { method: 'DELETE' })).keys || []); toast('Trusted update key removed.'); }
+  catch (error) { toast(error.message, 'error'); }
+});
+$('#export-recovery-key').addEventListener('click', async (event) => {
+  const password = await requestAction({ title: 'Export recovery key?', message: 'Anyone holding this key and a backup can decrypt every stored secret. Store it offline, separate from your backups. Confirm your password to continue.', confirmLabel: 'Export key', danger: true, inputLabel: 'Password', inputType: 'password', autocomplete: 'current-password' });
+  if (!password) return;
+  const button = event.currentTarget;
+  setBusy(button, true, 'Exporting…');
+  try {
+    const result = await api('/api/admin/security/recovery-key', { method: 'POST', body: { password } });
+    if (result.keyring) {
+      const url = URL.createObjectURL(new Blob([`${JSON.stringify(result.keyring, null, 2)}\n`], { type: 'application/json' }));
+      const link = Object.assign(document.createElement('a'), { href: url, download: result.filename || '.master-keyring.json' });
+      document.body.append(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    toast(result.message, 'warning');
+  } catch (error) { toast(error.message, 'error'); }
   finally { setBusy(button, false); }
 });
 $('#cancel-update').addEventListener('click', async () => {

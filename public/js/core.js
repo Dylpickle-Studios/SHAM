@@ -431,6 +431,9 @@ function setAuthMode(mode) {
   $('#auth-switch').hidden = state.bootstrap?.needsSetup || !state.bootstrap?.registrationEnabled;
   $('#auth-switch').textContent = register ? 'Back to sign in' : 'Create an account';
   $('#auth-oidc').hidden = register || state.bootstrap?.needsSetup || !state.bootstrap?.oidcEnabled || Boolean(state.mfaToken);
+  const setupToken = register && Boolean(state.bootstrap?.setupTokenRequired) && !state.mfaToken;
+  $('#auth-setup-token-wrap').hidden = !setupToken;
+  $('#auth-setup-token').required = setupToken;
   $('#auth-error').textContent = '';
 }
 
@@ -444,7 +447,7 @@ $('#auth-form').addEventListener('submit', async (event) => {
   try {
     const result = state.mfaToken
       ? await api('/api/auth/login/totp', { method: 'POST', body: { mfaToken: state.mfaToken, code: $('#auth-mfa-code').value } })
-      : await api(`/api/auth/${state.authMode}`, { method: 'POST', body: { username: $('#auth-username').value, password: $('#auth-password').value } });
+      : await api(`/api/auth/${state.authMode}`, { method: 'POST', body: { username: $('#auth-username').value, password: $('#auth-password').value, ...(state.authMode === 'register' ? { setupToken: $('#auth-setup-token').value.trim() } : {}) } });
     if (result.mfaRequired) {
       showMfaLogin(result);
       return;

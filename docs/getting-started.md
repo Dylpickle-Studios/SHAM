@@ -86,6 +86,16 @@ If SHAM is running on another server, replace `127.0.0.1` with that server's add
 
 The first successfully created account becomes the administrator. SHAM then locks ordinary public registration unless an administrator explicitly changes the registration policy.
 
+Creating that first account requires a one-time **setup token**, so whoever reaches a fresh instance first cannot claim it. While no account exists, SHAM prints the token in its server log at every start and stores it in `.setup-token` (mode `0600`) inside the data directory:
+
+```bash
+docker compose logs sham | grep -A1 "setup token"
+# or
+cat sham-data/.setup-token
+```
+
+Enter it in the **Setup token** field of the *Create administrator* screen. SHAM deletes the file once the administrator exists. To choose the value yourself (for example in provisioning scripts), set `SHAM_SETUP_TOKEN` to at least 16 characters; SHAM then does not echo it in the log.
+
 ### What the base Compose file exposes
 
 The supplied Compose file publishes:

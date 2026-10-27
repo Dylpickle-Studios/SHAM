@@ -92,7 +92,8 @@ test('hosted Compose policy blocks common project-boundary escapes', () => {
     'cannot disable container security profiles',
     'must not attach unmanaged Docker resources'
   ]) assert.match(runtime, new RegExp(phrase));
-  assert.match(runtime, /assertComposePathInside\(root, dockerfile/);
+  assert.match(runtime, /label: `\$\{prefix\} Dockerfile`/);
+  assert.match(runtime, /assertComposePathInside\(root, entry\.path, entry\.label\)/);
   assert.match(runtime, /internal: true/);
 });
 

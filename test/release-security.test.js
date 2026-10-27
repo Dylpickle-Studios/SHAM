@@ -24,7 +24,7 @@ test('release is AGPL-3.0-or-later and exposes the license from the interface', 
 test('multipart parsers pin the patched Multer release and disable field nesting', () => {
   const pkg = JSON.parse(read('package.json'));
   const server = read('src/server.js');
-  assert.equal(pkg.dependencies.multer, '2.4.0');
+  assert.equal(pkg.dependencies.multer, '2.5.0');
   assert.equal((server.match(/fieldNestingDepth:\s*0/g) || []).length, 3);
   const fieldLimit = Number(server.match(/const SITE_FORM_FIELD_LIMIT = (\d+);/)?.[1] || 0);
   assert.ok(fieldLimit >= 128 && fieldLimit <= 256, `site form field limit ${fieldLimit} must leave headroom without being unbounded`);

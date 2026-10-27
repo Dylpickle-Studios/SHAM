@@ -12,6 +12,8 @@ const {
 const PENDING_PATH = path.join(UPDATES_DIR, 'pending-update.json');
 const STATE_PATH = path.join(UPDATES_DIR, 'update-state.json');
 const MAX_UPDATE_BYTES = 512 * 1024 * 1024;
+const UPDATE_TRUSTED_KEYS_SETTING = 'update_trusted_keys_json';
+const VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const MANAGED_PATHS = ['src', 'public', 'bin', 'runtime-agent', 'docs', 'examples', 'test', 'scripts', '.github', 'README.md', 'AUDIT-REPORT.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'RELEASING.md', 'SECURITY.md', 'Dockerfile', 'docker-compose.yml', 'docker-compose.isolation.yml', '.dockerignore', '.env.example', '.gitattributes', '.gitignore', 'LICENSE', 'package.json', 'package-lock.json'];
 
 function safeEntry(name) {
@@ -30,6 +32,36 @@ function detectRoot(directory) {
     if (fs.existsSync(path.join(nested, 'package.json')) && fs.existsSync(path.join(nested, 'src', 'server.js'))) return nested;
   }
   throw new Error('Update ZIP must contain a SHAM package with package.json and src/server.js.');
+}
+
+function parseVersion(value) {
+  const match = VERSION_PATTERN.exec(String(value || ''));
+  if (!match) return null;
+  return { core: match.slice(1, 4).map(BigInt), prerelease: match[4] ? match[4].split('.') : [] };
+}
+
+/** Semantic-version precedence: build metadata is ignored and a prerelease sorts before its release. */
+function compareVersions(left, right) {
+  const a = parseVersion(left);
+  const b = parseVersion(right);
+  if (!a || !b) throw new Error('Versions must use semantic versioning.');
+  for (let index = 0; index < 3; index += 1) {
+    if (a.core[index] !== b.core[index]) return a.core[index] < b.core[index] ? -1 : 1;
+  }
+  if (!a.prerelease.length || !b.prerelease.length) return (b.prerelease.length ? 1 : 0) - (a.prerelease.length ? 1 : 0);
+  for (let index = 0; index < Math.max(a.prerelease.length, b.prerelease.length); index += 1) {
+    const x = a.prerelease[index];
+    const y = b.prerelease[index];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    if (x === y) continue;
+    const xNumeric = /^\d+$/.test(x);
+    const yNumeric = /^\d+$/.test(y);
+    if (xNumeric && yNumeric) return BigInt(x) < BigInt(y) ? -1 : 1;
+    if (xNumeric !== yNumeric) return xNumeric ? -1 : 1;
+    return x < y ? -1 : 1;
+  }
+  return 0;
 }
 
 function isInside(base, candidate) {
@@ -177,7 +209,7 @@ class UpdateManager {
     return { currentVersion: this.currentVersion(), pending, state, active, persistent: true, history };
   }
 
-  stage(archivePath, originalName = 'sham-update.zip', { allowUnsigned = false } = {}) {
+  stage(archivePath, originalName = 'sham-update.zip', { allowUnsigned = false, allowDowngrade = false } = {}) {
     return this.runMutation(async () => {
       if (readJsonSync(PENDING_PATH)) throw new Error('An update is already staged. Cancel or apply it before staging another archive.');
       const stat = await fs.promises.stat(archivePath);
@@ -188,7 +220,8 @@ class UpdateManager {
         let worker;
         const cleanup = async () => fs.promises.rm(stageBase, { recursive: true, force: true }).catch(() => {});
         try {
-          const trustedKeys = this.db?.prepare("SELECT value FROM settings WHERE key = 'plugin_trusted_keys_json'").get()?.value || '[]';
+          // Core updates have their own trust store; plugin publisher keys never authorize SHAM itself.
+          const trustedKeys = this.db?.prepare('SELECT value FROM settings WHERE key = ?').get(UPDATE_TRUSTED_KEYS_SETTING)?.value || '[]';
           worker = new Worker(path.join(__dirname, 'update-worker.js'), { workerData: { archivePath, stageBase, trustedKeys } });
         } catch (error) { void cleanup().then(() => reject(error)); return; }
         this.workers.add(worker);
@@ -200,17 +233,26 @@ class UpdateManager {
             const manifest = message.packageManifest;
             const packageRoot = path.resolve(message.packageRoot);
             if (!isInside(stageBase, packageRoot)) throw new Error('Update staging path is invalid.');
-            if (manifest.name !== 'simple-hosting-and-more' || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(String(manifest.version || ''))) throw new Error('Update package name or version is invalid.');
+            if (manifest.name !== 'simple-hosting-and-more' || !parseVersion(manifest.version)) throw new Error('Update package name or version is invalid.');
             if (!fs.existsSync(path.join(packageRoot, 'src', 'bootstrap.js'))) throw new Error('Update package does not support safe bootstrapping.');
             if (message.signature?.status === 'unsigned' && !allowUnsigned) throw new Error('This SHAM update is unsigned. Add a trusted Ed25519 publisher signature or explicitly acknowledge the unsigned-update risk.');
+            if (message.signature?.status === 'untrusted' && !allowUnsigned) throw new Error(`This SHAM update is signed by key “${message.signature.keyId}”, which is not a trusted update key. Add it under trusted update keys or explicitly acknowledge the unsigned-update risk.`);
             const currentManifest = JSON.parse(await fs.promises.readFile(path.join(resolveActiveAppRoot(), 'package.json'), 'utf8'));
+            // An old, validly signed release must not be replayable to reintroduce fixed vulnerabilities.
+            if (parseVersion(currentManifest.version) && compareVersions(manifest.version, currentManifest.version) <= 0 && !allowDowngrade) {
+              throw new Error(`Update version ${manifest.version} is not newer than the running version ${currentManifest.version}. Explicitly acknowledge the downgrade to install it.`);
+            }
             const dependencyShape = (value) => JSON.stringify(Object.fromEntries(Object.entries(value || {}).sort(([a], [b]) => a.localeCompare(b))));
             const dependenciesChanged = dependencyShape(manifest.dependencies) !== dependencyShape(currentManifest.dependencies)
               || dependencyShape(manifest.optionalDependencies) !== dependencyShape(currentManifest.optionalDependencies);
             if (dependenciesChanged) throw new Error('This update changes runtime dependencies. Use a reviewed container image or perform a manual upgrade so dependency installation can be verified before switching versions.');
-            const pending = { version: manifest.version, stagedRoot: packageRoot, archiveName: path.basename(originalName), stagedAt: new Date().toISOString(), signature: message.signature };
+            const downgrade = parseVersion(currentManifest.version) ? compareVersions(manifest.version, currentManifest.version) <= 0 : false;
+            const pending = { version: manifest.version, stagedRoot: packageRoot, archiveName: path.basename(originalName), stagedAt: new Date().toISOString(), signature: message.signature, downgrade };
             await writeJsonAtomic(PENDING_PATH, pending);
-            if (this.db) this.db.prepare("INSERT INTO update_history (version, status, detail, archive_name) VALUES (?, 'staged', ?, ?)").run(manifest.version, message.signature?.status === 'verified' ? `Signature verified for ${message.signature.signer || message.signature.keyId}.` : 'Unsigned update explicitly acknowledged; update will activate from persistent storage on the next restart.', pending.archiveName);
+            const detail = message.signature?.status === 'verified' ? `Signature verified for ${message.signature.signer || message.signature.keyId}.`
+              : message.signature?.status === 'untrusted' ? `Signature key ${message.signature.keyId} is not a trusted update key; unsigned-update risk explicitly acknowledged.`
+                : 'Unsigned update explicitly acknowledged; update will activate from persistent storage on the next restart.';
+            if (this.db) this.db.prepare("INSERT INTO update_history (version, status, detail, archive_name) VALUES (?, 'staged', ?, ?)").run(manifest.version, downgrade ? `${detail} Downgrade from ${currentManifest.version} explicitly acknowledged.` : detail, pending.archiveName);
             finish(resolve, pending);
           } catch (error) { await cleanup(); finish(reject, error); }
         });
@@ -303,6 +345,8 @@ async function rollbackAppliedUpdate(state, reason) {
 }
 
 module.exports = {
+  UPDATE_TRUSTED_KEYS_SETTING,
+  compareVersions,
   UpdateManager,
   applyPendingUpdate,
   markAppliedUpdateHealthy,

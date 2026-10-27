@@ -79,7 +79,8 @@ function verifyUpdateSignature(root, packageManifest, trustedKeys) {
   if (signature.format !== 'sham-update-signature-v1' || signature.algorithm !== 'ed25519') throw new Error('The SHAM update signature manifest is invalid.');
   if (String(signature.version || '') !== String(packageManifest.version || '')) throw new Error('The update signature version does not match package.json.');
   const key = normalizeTrustedKeys(trustedKeys).find((entry) => entry.id === String(signature.keyId || ''));
-  if (!key) throw new Error(`Update signature key “${String(signature.keyId || '')}” is not trusted by this SHAM instance.`);
+  // A signature from a key outside the update trust store proves nothing, so it follows the unsigned acknowledgement flow.
+  if (!key) return { status: 'untrusted', keyId: String(signature.keyId || '').slice(0, 100), signer: null };
   let publicKey;
   try { publicKey = crypto.createPublicKey(key.publicKey); }
   catch { throw new Error(`Trusted publisher key “${key.id}” is not a valid public key.`); }

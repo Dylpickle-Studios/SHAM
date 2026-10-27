@@ -131,8 +131,24 @@ SHAM rejects unsafe/unmanaged Compose features by design. Remove or redesign:
 - External networks/volumes/configs/secrets.
 - Unsafe security-profile overrides covered by policy validation.
 - Published host ports on support services.
+- Any Compose key outside SHAM's allowlist; the error names the key (`uses unsupported Compose key "..."`). See [Compose restrictions](runtimes-and-docker.md#compose-restrictions).
+- `include:` or `extends:` with `file:`; inline those services into the project's Compose file.
+- Paths (build context, Dockerfile, `env_file`, config/secret files) that leave the project, including through a symlink.
+- Build `tags:`, `ssh:`, `cache_to:`, or remote build contexts.
 
 Use named volumes and private Compose networks.
+
+## Compose service lacks a capability or `sudo` fails
+
+SHAM runs every Compose service with `cap_drop: [ALL]`, a small compatibility `cap_add` set, and `no-new-privileges`. `ping` (needs `NET_RAW`), `chroot`, `mknod`, file capabilities, and set-uid escalation (`sudo`, `su`) do not work inside Compose services. Run the process as the intended user from the start (`user:`) instead of escalating at runtime.
+
+## Workload receives `403` from SHAM or another site's port
+
+Connections from SHAM's runtime Docker networks to the dashboard or to a site's direct listener port are refused by design. Call other sites by domain through the shared edge (port 80/443) instead.
+
+## Reverse proxy target rejected
+
+Proxy sites cannot target link-local/cloud-metadata addresses (`169.254.0.0/16`, `fe80::/10`, `fd00:ec2::254`, including IPv4-mapped forms) or the SHAM dashboard port on a local address. Existing sites with such a target fail to start until the target is changed.
 
 ## Compose application is reachable directly on the host
 

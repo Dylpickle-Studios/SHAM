@@ -124,6 +124,260 @@ function validateDeclarativeSql(sql, mode) {
   return normalized;
 }
 
+// Plugin SQL policy, enforced by compiling each statement and inspecting the VDBE
+// program SQLite will actually run (EXPLAIN), rather than by pattern-matching SQL text:
+// every btree a statement opens is mapped back through sqlite_schema root pages to a
+// table. Plugins may read only the core tables below (with column allowlists where a
+// table also holds sensitive values) plus their own `plugin_<id>_` tables, and may
+// write and run DDL only on their own tables.
+const PLUGIN_READABLE_TABLES = new Map([
+  // sites.git_url can embed repository credentials and the command/policy columns can carry inline secrets.
+  ['sites', new Set(['id', 'name', 'slug', 'directory_name', 'port', 'bind_host', 'runtime_type', 'enabled', 'domain', 'domain_only', 'preview_domain', 'ssl_enabled', 'cloudflare_enabled', 'edge_enabled', 'release_mode', 'maintenance_enabled', 'pinned', 'runtime_isolation', 'entry_file', 'spa_fallback', 'cache_seconds', 'compression', 'health_check_path', 'git_branch', 'created_at', 'updated_at'])],
+  ['site_stats', null],
+  ['site_daily_stats', null],
+  ['site_performance_samples', null],
+  ['performance_samples', null]
+]);
+const DML_KEYWORDS = new Set(['select', 'values', 'with', 'insert', 'replace', 'update', 'delete']);
+const INDEX_KEY_OPCODES = new Set(['SeekGE', 'SeekGT', 'SeekLE', 'SeekLT', 'SeekScan', 'IdxGE', 'IdxGT', 'IdxLE', 'IdxLT', 'Found', 'NotFound', 'NoConflict', 'IfNoHope']);
+const OPFLAG_P2ISREG = 0x10; // P2 of OP_Open* is a register holding a root page being created (CREATE TABLE AS, CREATE INDEX).
+const SQL_POLICY_CACHE_LIMIT = 500;
+
+function pluginTablePrefix(pluginId) {
+  return `plugin_${String(pluginId).toLowerCase().replace(/-/g, '_')}_`;
+}
+
+function sqlPolicyError(message) {
+  const error = new Error(message);
+  error.code = 'SHAM_PLUGIN_SQL_POLICY';
+  return error;
+}
+
+function sqlTokens(sql) {
+  const tokens = [];
+  let index = 0;
+  const quoted = (close, type) => {
+    let value = '';
+    index += 1;
+    while (index < sql.length) {
+      if (sql[index] === close) {
+        if (close !== ']' && sql[index + 1] === close) { value += close; index += 2; continue; }
+        index += 1;
+        return tokens.push({ type, value });
+      }
+      value += sql[index];
+      index += 1;
+    }
+    throw sqlPolicyError('Plugin SQL contains an unterminated quoted value.');
+  };
+  while (index < sql.length) {
+    const character = sql[index];
+    if (/\s/.test(character)) index += 1;
+    else if (sql.startsWith('--', index)) { const end = sql.indexOf('\n', index); index = end < 0 ? sql.length : end + 1; }
+    else if (sql.startsWith('/*', index)) { const end = sql.indexOf('*/', index + 2); index = end < 0 ? sql.length : end + 2; }
+    else if (character === "'") quoted("'", 'string');
+    else if (character === '"' || character === '`') quoted(character, 'identifier');
+    else if (character === '[') quoted(']', 'identifier');
+    else if (/[A-Za-z0-9_$\u0080-￿]/.test(character)) {
+      const match = /^[A-Za-z0-9_$\u0080-￿]+/.exec(sql.slice(index));
+      tokens.push({ type: 'word', value: match[0] });
+      index += match[0].length;
+    } else { tokens.push({ type: 'punct', value: character }); index += 1; }
+  }
+  return tokens;
+}
+
+function parseDdl(tokens) {
+  let index = 1;
+  const word = (offset = 0) => (tokens[index + offset]?.type === 'word' ? tokens[index + offset].value.toLowerCase() : '');
+  const expect = (value) => { if (word() !== value) throw sqlPolicyError('Plugin SQL may only create, drop, or alter its own tables and indexes.'); index += 1; };
+  const skip = (...words) => { if (words.every((value, offset) => word(offset) === value)) index += words.length; };
+  const name = () => {
+    const first = tokens[index];
+    if (!first || first.type === 'punct') throw sqlPolicyError('Plugin SQL object name is missing.');
+    index += 1;
+    if (tokens[index]?.value === '.' && tokens[index].type === 'punct') {
+      const second = tokens[index + 1];
+      if (!second || second.type === 'punct') throw sqlPolicyError('Plugin SQL object name is missing.');
+      index += 2;
+      return { schema: first.value.toLowerCase(), name: second.value };
+    }
+    return { schema: 'main', name: first.value };
+  };
+  const action = tokens[0].value.toLowerCase();
+  if (action === 'create') {
+    if (['temp', 'temporary'].includes(word())) throw sqlPolicyError('Plugin SQL may not create temporary objects.');
+    if (word() === 'unique') index += 1;
+    const kind = word();
+    if (!['table', 'index'].includes(kind) || (tokens[1].value.toLowerCase() === 'unique' && kind !== 'index')) {
+      throw sqlPolicyError('Plugin SQL may only create tables and indexes; triggers, views, and virtual tables are not allowed.');
+    }
+    index += 1;
+    skip('if', 'not', 'exists');
+    const created = name();
+    const names = [created];
+    if (kind === 'index') { expect('on'); names.push(name()); }
+    return { action, kind, names };
+  }
+  if (action === 'drop') {
+    const kind = word();
+    if (!['table', 'index'].includes(kind)) throw sqlPolicyError('Plugin SQL may only drop its own tables and indexes.');
+    index += 1;
+    skip('if', 'exists');
+    return { action, kind, names: [name()] };
+  }
+  expect('table');
+  const names = [name()];
+  if (word() === 'rename' && word(1) === 'to') { index += 2; names.push(name()); }
+  return { action, kind: 'table', names };
+}
+
+class PluginSqlPolicy {
+  constructor(db) {
+    this.db = db;
+    this.cache = new Map();
+    this.columnCache = new Map();
+  }
+
+  /**
+   * Returns a prepared statement after verifying it against the plugin SQL policy.
+   * @param {string} pluginId
+   * @param {string} sql
+   * @param {unknown[]} bindings values used only to compile the EXPLAIN program
+   * @param {{ write: boolean, extraPrefixes?: string[] }} options
+   */
+  prepare(pluginId, sql, bindings, { write, extraPrefixes = [] }) {
+    const source = String(sql ?? '');
+    if (!source.trim() || source.includes('\0') || source.length > 100_000) throw sqlPolicyError('Plugin SQL is empty, too long, or invalid.');
+    const schemaVersion = this.db.pragma('schema_version', { simple: true });
+    const key = `${pluginId}\0${write ? 1 : 0}\0${schemaVersion}\0${extraPrefixes.join(',')}\0${source}`;
+    const cached = this.cache.get(key);
+    if (cached) return cached;
+    const statement = this.check(pluginId, source, bindings, { write, extraPrefixes });
+    if (this.cache.size >= SQL_POLICY_CACHE_LIMIT) this.cache.delete(this.cache.keys().next().value);
+    this.cache.set(key, statement);
+    return statement;
+  }
+
+  ownership(pluginId, extraPrefixes) {
+    const prefix = pluginTablePrefix(pluginId);
+    const prefixes = [...new Set([...this.db.prepare('SELECT id FROM plugins').all().map((row) => pluginTablePrefix(row.id)), ...extraPrefixes, prefix])];
+    // A longer installed prefix wins, so plugin "a" never owns tables of plugin "a-b" (plugin_a_b_*).
+    return (name) => {
+      const lower = String(name).toLowerCase();
+      return lower.length > prefix.length && lower.startsWith(prefix)
+        && !prefixes.some((other) => other.length > prefix.length && lower.startsWith(other));
+    };
+  }
+
+  columns(kind, name) {
+    const key = `${kind}\0${name}`;
+    if (!this.columnCache.has(key)) {
+      const quoted = `"${String(name).replaceAll('"', '""')}"`;
+      const rows = kind === 'index' ? this.db.prepare(`PRAGMA index_xinfo(${quoted})`).all() : this.db.prepare(`PRAGMA table_xinfo(${quoted})`).all();
+      this.columnCache.set(key, rows.map((row) => (kind === 'index' ? { name: row.name, cid: row.cid, key: row.key } : { name: row.name, cid: row.cid })));
+    }
+    return this.columnCache.get(key);
+  }
+
+  check(pluginId, sql, bindings, { write, extraPrefixes }) {
+    const tokens = sqlTokens(sql);
+    if (!tokens.length || tokens[0].type !== 'word') throw sqlPolicyError('Plugin SQL must start with a statement keyword.');
+    const keyword = tokens[0].value.toLowerCase();
+    const owns = this.ownership(pluginId, extraPrefixes);
+    const words = tokens.filter((token) => token.type === 'word' || token.type === 'identifier').map((token) => token.value.toLowerCase());
+    // Single-quoted strings can stand in for identifiers in SQLite, so they count here too.
+    if (tokens.some((token) => token.type !== 'punct' && /^sqlite_(?:sequence|master|schema|temp_master|temp_schema|stat\d)$/i.test(token.value))) throw sqlPolicyError('Plugin SQL may not reference SQLite internal tables.');
+    for (const name of DECLARATIVE_DANGEROUS_FUNCTIONS) if (words.includes(name)) throw sqlPolicyError(`Plugin SQL may not use ${name}.`);
+    if (words.some((value) => value.startsWith('pragma_'))) throw sqlPolicyError('Plugin SQL may not access SQLite pragma virtual tables.');
+    let ddl = null;
+    if (['create', 'drop', 'alter'].includes(keyword)) {
+      ddl = parseDdl(tokens);
+      for (const target of ddl.names) {
+        if (target.schema !== 'main') throw sqlPolicyError('Plugin SQL may only use the main SHAM database.');
+        if (!owns(target.name)) throw sqlPolicyError(`Plugin SQL may only create, alter, or drop tables named with the ${pluginTablePrefix(pluginId)} prefix.`);
+      }
+      if (ddl.action === 'drop' && ddl.kind === 'index') {
+        const index = this.db.prepare("SELECT tbl_name FROM sqlite_schema WHERE type = 'index' AND name = ? COLLATE NOCASE").get(ddl.names[0].name);
+        if (index && !owns(index.tbl_name)) throw sqlPolicyError('Plugin SQL may only drop indexes on its own tables.');
+      }
+    } else if (!DML_KEYWORDS.has(keyword)) {
+      throw sqlPolicyError(`Plugin SQL may not run ${keyword.toUpperCase()} statements.`);
+    }
+    if (ddl && !write) throw sqlPolicyError('Schema changes require the data:write permission.');
+
+    const statement = this.db.prepare(sql);
+    if (!statement.readonly && !write) throw sqlPolicyError('This statement modifies data and requires the data:write permission.');
+    const objects = new Map(this.db.prepare('SELECT type, name, tbl_name AS tableName, rootpage FROM sqlite_schema WHERE rootpage > 0').all().map((row) => [row.rootpage, row]));
+    const program = this.db.prepare(`EXPLAIN ${sql}`).all(...bindings);
+    const authorize = (table, writing) => {
+      if (owns(table)) return null;
+      const lower = String(table).toLowerCase();
+      // AUTOINCREMENT inserts on plugin tables maintain sqlite_sequence implicitly; explicit references are rejected above.
+      if (lower === 'sqlite_sequence') return null;
+      if (writing) throw sqlPolicyError(`Plugin SQL may not modify ${table}; plugins may only write tables named with the ${pluginTablePrefix(pluginId)} prefix.`);
+      if (!PLUGIN_READABLE_TABLES.has(lower)) throw sqlPolicyError(`Plugin SQL may not read ${table}.`);
+      return PLUGIN_READABLE_TABLES.get(lower);
+    };
+    const requireColumn = (cursor, name) => {
+      if (!cursor.allowed.has(String(name).toLowerCase())) throw sqlPolicyError(`Plugin SQL may not read ${cursor.table}.${name ?? 'an indexed expression'}.`);
+    };
+    let cursors = new Map();
+    let previousAddress = -1;
+    for (const op of program) {
+      // Trigger and foreign-key sub-programs restart at address 0 with their own cursor numbers.
+      if (op.addr <= previousAddress) cursors = new Map();
+      previousAddress = op.addr;
+      const opcode = op.opcode;
+      if (['OpenRead', 'OpenWrite', 'ReopenIdx'].includes(opcode)) {
+        if (op.p5 & OPFLAG_P2ISREG) {
+          if (!ddl) throw sqlPolicyError('Plugin SQL opened an unexpected database object.');
+          cursors.delete(op.p1);
+          continue;
+        }
+        if (op.p2 === 1 && ddl && (op.p3 === 0 || (op.p3 === 1 && ddl.action === 'alter'))) { cursors.delete(op.p1); continue; }
+        if (op.p3 !== 0) throw sqlPolicyError('Plugin SQL may not use temporary or attached databases.');
+        const object = objects.get(op.p2);
+        if (!object) throw sqlPolicyError('Plugin SQL may not access SQLite internal tables.');
+        const table = object.type === 'index' ? object.tableName : object.name;
+        const allowed = authorize(table, opcode === 'OpenWrite');
+        cursors.set(op.p1, allowed ? { table, index: object.type === 'index' ? object.name : null, allowed } : null);
+      } else if (opcode === 'OpenDup') {
+        cursors.set(op.p1, cursors.get(op.p2) ?? null);
+      } else if (['OpenEphemeral', 'OpenAutoindex', 'OpenPseudo', 'SorterOpen'].includes(opcode)) {
+        cursors.delete(op.p1);
+      } else if (opcode === 'Clear' || opcode === 'Destroy') {
+        const database = opcode === 'Clear' ? op.p2 : op.p3;
+        const object = objects.get(op.p1);
+        if (database !== 0 || !object) throw sqlPolicyError('Plugin SQL may not modify SQLite internal tables.');
+        if (opcode === 'Destroy' && !ddl) throw sqlPolicyError('Plugin SQL opened an unexpected database object.');
+        authorize(object.type === 'index' ? object.tableName : object.name, true);
+      } else if (opcode.startsWith('V') && ['VOpen', 'VCreate', 'VDestroy', 'VFilter', 'VUpdate', 'VBegin'].includes(opcode)) {
+        throw sqlPolicyError('Plugin SQL may not use virtual tables or table-valued functions.');
+      } else if (opcode === 'Column') {
+        const cursor = cursors.get(op.p1);
+        if (!cursor) continue;
+        if (cursor.index) {
+          const column = this.columns('index', cursor.index)[op.p2];
+          if (column && column.cid !== -1) requireColumn(cursor, column.name);
+        } else {
+          const column = this.columns('table', cursor.table)[op.p2];
+          if (column) requireColumn(cursor, column.name);
+        }
+      } else if (opcode === 'RowData') {
+        if (cursors.get(op.p1)) throw sqlPolicyError(`Plugin SQL may not copy whole rows from ${cursors.get(op.p1).table}.`);
+      } else if (INDEX_KEY_OPCODES.has(opcode)) {
+        const cursor = cursors.get(op.p1);
+        if (cursor?.index) for (const column of this.columns('index', cursor.index)) if (column.key && column.cid !== -1) requireColumn(cursor, column.name);
+      } else if (['Function', 'PureFunc', 'AggStep', 'AggStep1', 'AggValue', 'AggInverse'].includes(opcode)) {
+        const name = String(op.p4 || '').replace(/\(.*$/, '').toLowerCase();
+        if (DECLARATIVE_DANGEROUS_FUNCTIONS.includes(name)) throw sqlPolicyError(`Plugin SQL may not use ${name}.`);
+      }
+    }
+    return statement;
+  }
+}
+
 function validateManifest(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('plugin.json must contain an object.');
   const id = String(input.id || '').trim().toLowerCase();
@@ -413,7 +667,13 @@ class PluginManager {
     return current;
   }
 
+  pluginStatement(pluginId, sql, bindings, write, extraPrefixes = []) {
+    this.sqlPolicy ||= new PluginSqlPolicy(this.db);
+    return this.sqlPolicy.prepare(pluginId, sql, bindings, { write, extraPrefixes });
+  }
+
   context(row, manifest) {
+    const bindings = (params) => (Array.isArray(params) ? params : [params]);
     const permissions = new Set(manifest.permissions || []);
     const requirePermission = (permission) => {
       if (!permissions.has(permission)) throw new Error(`Plugin ${row.id} does not have the ${permission} permission.`);
@@ -423,9 +683,9 @@ class PluginManager {
       manifest,
       permissions: [...permissions],
       data: {
-        all: (sql, params = []) => { requirePermission('data:read'); return this.db.prepare(sql).all(...params); },
-        get: (sql, params = []) => { requirePermission('data:read'); return this.db.prepare(sql).get(...params); },
-        run: (sql, params = []) => { requirePermission('data:write'); return this.db.prepare(sql).run(...params); }
+        all: (sql, params = []) => { requirePermission('data:read'); const values = bindings(params); return this.pluginStatement(row.id, sql, values, permissions.has('data:write')).all(...values); },
+        get: (sql, params = []) => { requirePermission('data:read'); const values = bindings(params); return this.pluginStatement(row.id, sql, values, permissions.has('data:write')).get(...values); },
+        run: (sql, params = []) => { requirePermission('data:write'); const values = bindings(params); return this.pluginStatement(row.id, sql, values, true).run(...values); }
       },
       settings: {
         get: (key, fallback = null) => { requirePermission('settings:read'); return this.settingsFor(row.id)[key] ?? fallback; },
@@ -476,7 +736,7 @@ class PluginManager {
     } else {
       const api = {};
       for (const [action, definition] of Object.entries(manifest.queries || {})) {
-        const statement = this.db.prepare(definition.sql);
+        const statement = this.pluginStatement(row.id, definition.sql, definition.params.map(() => null), definition.mode === 'run');
         api[action] = ({ body = {}, query = {}, user = null, method = 'GET' }) => {
           if (definition.mode === 'run') {
             if (user?.role !== 'admin') throw new Error('Administrator access is required for declarative write actions.');
@@ -577,6 +837,16 @@ class PluginManager {
       rawManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     }
     const manifest = validateManifest(rawManifest);
+    const prefix = pluginTablePrefix(manifest.id);
+    const clash = this.db.prepare('SELECT id FROM plugins WHERE id != ?').all(manifest.id).find((row) => pluginTablePrefix(row.id) === prefix);
+    if (clash) throw new Error(`Plugin ID “${manifest.id}” would share database table names with installed plugin “${clash.id}”.`);
+    for (const [action, definition] of Object.entries(manifest.queries || {})) {
+      try { this.pluginStatement(manifest.id, definition.sql, definition.params.map(() => null), definition.mode === 'run', [prefix]); }
+      catch (error) {
+        // Tables a plugin expects but that do not exist yet only fail when it is enabled; policy violations fail now.
+        if (error.code === 'SHAM_PLUGIN_SQL_POLICY') throw new Error(`Plugin query “${action}” is not allowed: ${error.message}`);
+      }
+    }
     if (!signature) {
       const trusted = this.db.prepare("SELECT value FROM settings WHERE key = 'plugin_trusted_keys_json'").get()?.value || '[]';
       signature = verifyPluginSignature(staging, rawManifest, normalizeTrustedKeys(trusted));
@@ -871,4 +1141,4 @@ ${source}
   }
 }
 
-module.exports = { PluginManager, validateManifest, validateDeclarativeSql };
+module.exports = { PluginManager, PluginSqlPolicy, PLUGIN_READABLE_TABLES, pluginTablePrefix, validateManifest, validateDeclarativeSql };

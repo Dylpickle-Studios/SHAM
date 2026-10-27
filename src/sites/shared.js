@@ -52,6 +52,8 @@ let dockerInternalNetworkPromise = null;
 const COMPRESSIBLE_EXTENSIONS = new Set(['.html', '.htm', '.css', '.js', '.mjs', '.json', '.svg', '.xml', '.txt', '.csv', '.map', '.wasm']);
 const INTERNAL_EDGE_TOKEN = crypto.randomBytes(32).toString('base64url');
 const REQUEST_IDENTITY = Symbol('shamRequestIdentity');
+const CLOUDFLARE_TRUST = Symbol('shamCloudflareTrust');
+const CLOUDFLARE_IDENTITY_HEADERS = ['cf-connecting-ip', 'cf-connecting-ipv6', 'cf-pseudo-ipv4', 'cf-ipcountry', 'true-client-ip', 'cf-visitor', 'cf-ray', 'cf-ew-via', 'cf-worker'];
 
 
 function appendTail(current, chunk, limit = 64 * 1024) {
@@ -95,7 +97,7 @@ function terminateChild(child, signal = 'SIGTERM') {
 async function ensureDockerInternalNetwork() {
   if (dockerInternalNetworkPromise) return dockerInternalNetworkPromise;
   dockerInternalNetworkPromise = getRuntimeClient().ensureNetwork({ name: DOCKER_INTERNAL_NETWORK, internal: true })
-    .then(() => DOCKER_INTERNAL_NETWORK)
+    .then(() => { require('../runtime/workload-networks').refreshWorkloadSubnets(); return DOCKER_INTERNAL_NETWORK; })
     .catch((error) => { dockerInternalNetworkPromise = null; throw error; });
   return dockerInternalNetworkPromise;
 }
@@ -186,6 +188,53 @@ function trustedEdgePeer(ip) {
   return Boolean(version && trustedEdgePeers.check(ip, version === 6 ? 'ipv6' : 'ipv4'));
 }
 
+// Finds which process owns the other end of a loopback connection: the peer's
+// socket is the /proc/net/tcp{,6} row whose local port is our remote port and
+// whose remote port is our local port. Returns null when /proc is unavailable.
+function loopbackPeerOwnedBySupervisedCloudflared(socket) {
+  if (process.platform !== 'linux') return null;
+  const tables = ['tcp', 'tcp6'].map((name) => { try { return fs.readFileSync(`/proc/net/${name}`, 'utf8'); } catch { return ''; } });
+  if (!tables.some(Boolean)) return null;
+  const inodes = new Set();
+  for (const table of tables) {
+    for (const line of table.split('\n').slice(1)) {
+      const fields = line.trim().split(/\s+/);
+      if (fields.length < 10 || fields[9] === '0') continue;
+      if (Number.parseInt(fields[1].split(':')[1], 16) === socket.remotePort && Number.parseInt(fields[2].split(':')[1], 16) === socket.localPort) inodes.add(fields[9]);
+    }
+  }
+  if (!inodes.size) return false;
+  const { supervisedCloudflaredPids } = require('../cloudflare-tunnel');
+  for (const pid of supervisedCloudflaredPids()) {
+    let descriptors;
+    try { descriptors = fs.readdirSync(`/proc/${pid}/fd`); } catch { continue; }
+    for (const descriptor of descriptors) {
+      let link;
+      try { link = fs.readlinkSync(`/proc/${pid}/fd/${descriptor}`); } catch { continue; }
+      const match = /^socket:\[(\d+)\]$/.exec(link);
+      if (match && inodes.has(match[1])) return true;
+    }
+  }
+  return false;
+}
+
+let localTunnelPeerVerifier = loopbackPeerOwnedBySupervisedCloudflared;
+const localTunnelPeerVerdicts = new WeakMap();
+/** @param {((socket: any) => boolean | null) | null} verifier Test hook; null restores the /proc lookup. */
+function setLocalTunnelPeerVerifier(verifier) { localTunnelPeerVerifier = verifier || loopbackPeerOwnedBySupervisedCloudflared; }
+
+// Computed once per connection: keep-alive requests reuse the verdict.
+function localTunnelPeerTrusted(socket) {
+  if (!socket) return false;
+  if (localTunnelPeerVerdicts.has(socket)) return localTunnelPeerVerdicts.get(socket);
+  let verdict;
+  try { verdict = localTunnelPeerVerifier(socket); } catch { verdict = false; }
+  // Without /proc (non-Linux) keep the previous loopback-only behaviour.
+  const trusted = verdict === null ? true : Boolean(verdict);
+  localTunnelPeerVerdicts.set(socket, trusted);
+  return trusted;
+}
+
 function requestIdentity(site, req, { trustLocalCloudflareTunnel = false } = {}) {
   if (req[REQUEST_IDENTITY]) return req[REQUEST_IDENTITY];
   const peerIp = normalizeIp(req.socket?.remoteAddress);
@@ -194,10 +243,12 @@ function requestIdentity(site, req, { trustLocalCloudflareTunnel = false } = {})
     && crypto.timingSafeEqual(Buffer.from(suppliedEdgeToken), Buffer.from(INTERNAL_EDGE_TOKEN));
   // cloudflared is launched by SHAM and can only use a loopback origin. An
   // enabled tunnel route therefore gives the shared edge a narrow, local path
-  // for accepting Cloudflare's visitor headers without trusting every local
-  // request or a broad private network. Other proxy peers still require both
-  // explicit configuration and Cloudflare integration on the site.
-  const trustedLocalTunnel = trustLocalCloudflareTunnel && (peerIp === '127.0.0.1' || peerIp === '::1');
+  // for accepting Cloudflare's visitor headers, but only from a connection a
+  // SHAM-supervised cloudflared process actually owns: any other local
+  // process (or a proxy site pointed back at the edge) is an ordinary peer.
+  // Other proxy peers still require both explicit configuration and
+  // Cloudflare integration on the site.
+  const trustedLocalTunnel = trustLocalCloudflareTunnel && (peerIp === '127.0.0.1' || peerIp === '::1') && localTunnelPeerTrusted(req.socket);
   const trustCloudflare = !trustedInternalEdge && (trustedLocalTunnel || (site.cloudflare_enabled && trustedEdgePeer(peerIp)));
   const forwardedIp = trustedInternalEdge ? normalizeIp(req.headers['x-sham-client-ip']) : 'unknown';
   const cloudflareIp = trustCloudflare ? normalizeIp(req.headers['cf-connecting-ip']) : 'unknown';
@@ -210,8 +261,26 @@ function requestIdentity(site, req, { trustLocalCloudflareTunnel = false } = {})
   delete req.headers['x-sham-client-ip'];
   delete req.headers['x-sham-client-country'];
   const client = classifyClient(req.headers['user-agent']);
+  req[CLOUDFLARE_TRUST] = trustedInternalEdge ? 'edge' : trustCloudflare;
   req[REQUEST_IDENTITY] = { ip, country, clientType: client.type, userAgent: client.userAgent };
   return req[REQUEST_IDENTITY];
+}
+
+// Call before SHAM proxies a request anywhere. Upstreams (including a proxy
+// site pointed back at a SHAM listener) then see Cloudflare's visitor headers
+// only when SHAM itself trusted them, rewritten to SHAM's resolved identity.
+function sanitizeCloudflareHeaders(site, req, options = {}) {
+  const identity = requestIdentity(site, req, options);
+  const trust = req[CLOUDFLARE_TRUST];
+  if (trust === 'edge') return identity;
+  if (trust === true) {
+    req.headers['cf-connecting-ip'] = identity.ip;
+    if (identity.country !== 'ZZ') req.headers['cf-ipcountry'] = identity.country;
+    else delete req.headers['cf-ipcountry'];
+    return identity;
+  }
+  for (const name of CLOUDFLARE_IDENTITY_HEADERS) delete req.headers[name];
+  return identity;
 }
 
 function buildIpBlockList(entries = []) {
@@ -455,6 +524,7 @@ module.exports = {
   runtimeEnvironment, buildEnvironment, operatorEnvironment, classifyClient, gzipAsync, brotliAsync, execFileAsync, COMPRESSIBLE_EXTENSIONS,
   INTERNAL_EDGE_TOKEN, REQUEST_IDENTITY, appendTail, cacheEntryBytes, responseChunkBytes, processOptions, terminateChild,
   ensureDockerInternalNetwork, terminateAndWait, realFileInside, realFileInsideAsync, hostForUrl, normalizeIp, requestHostname,
-  TRUSTED_EDGE_RANGES, trustedEdgePeers, trustedEdgePeer, requestIdentity, buildIpBlockList, ipMatchesList, hydrateSite, listen, closeServer,
+  TRUSTED_EDGE_RANGES, trustedEdgePeers, trustedEdgePeer, requestIdentity, sanitizeCloudflareHeaders, setLocalTunnelPeerVerifier,
+  CLOUDFLARE_IDENTITY_HEADERS, buildIpBlockList, ipMatchesList, hydrateSite, listen, closeServer,
   freePort, waitForPort, siteIsolation, dockerContainerName, siteRoot, legacySiteRoot, dockerHostDataPath
 };

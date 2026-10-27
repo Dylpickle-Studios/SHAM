@@ -160,6 +160,12 @@ function applyRuntimeCapabilities() {
     element.hidden = !available;
     if ('disabled' in element) element.disabled = !available;
   });
+  // The API rejects these for non-admins: they would let a user choose code SHAM executes.
+  const admin = state.user?.role === 'admin';
+  $$('[data-admin-only]').forEach((element) => {
+    element.disabled = !admin;
+    if (element.tagName === 'OPTION') element.hidden = !admin;
+  });
   const dockerAvailable = hasRuntimeCapability('docker');
   $('#isolation-options').hidden = !dockerAvailable;
   if (!hasRuntimeCapability('anubis')) {
@@ -260,6 +266,8 @@ function manifestCommandForForm(value) {
 }
 
 function applyUploadManifestPrefill(config) {
+  // Non-admins cannot use sham.yaml execution settings, so there is nothing to prefill.
+  if (state.user?.role !== 'admin') return;
   const driver = String(config.driver || '').toLowerCase();
   const runtimeByDriver = { static: 'static', process: 'process', container: 'container', compose: 'compose', proxy: 'proxy' };
   if (runtimeByDriver[driver]) $('#site-runtime').value = runtimeByDriver[driver];
@@ -288,7 +296,7 @@ function applyUploadManifestPrefill(config) {
   if (typeof config.buildpackBuilder === 'string') $('#site-buildpack-builder').value = config.buildpackBuilder;
   if (typeof config.composeFile === 'string') $('#site-compose-file').value = config.composeFile;
   if (typeof config.composeService === 'string') $('#site-compose-service').value = config.composeService;
-  $('#site-manifest-enabled').checked = true;
+  $('#site-manifest-enabled').checked = state.user?.role === 'admin';
   updateRuntimeFields();
   updateProbeFields();
 }
@@ -525,8 +533,10 @@ function applySiteTemplate(template) {
   if (preset.composeFile) $('#site-compose-file').value = preset.composeFile;
   if (preset.composeService) $('#site-compose-service').value = preset.composeService;
   if (preset.readiness) $('#site-readiness-type').value = preset.readiness;
-  $('#site-install-command').value = preset.install;
-  $('#site-build-command').value = preset.build;
+  // Template build steps are commands; only administrators may submit them.
+  const admin = state.user?.role === 'admin';
+  $('#site-install-command').value = admin ? preset.install : '';
+  $('#site-build-command').value = admin ? preset.build : '';
   $('#site-build-output').value = preset.output;
   $('#site-release-mode').checked = source === 'git';
   updateRuntimeFields();
@@ -665,7 +675,7 @@ function openNewSite() {
   $('#site-anubis-difficulty').value = '4';
   $('#site-anubis-policy').value = '';
   $('#site-release-mode').checked = false;
-  $('#site-manifest-enabled').checked = true;
+  $('#site-manifest-enabled').checked = state.user?.role === 'admin';
   $('#site-cloudflare-auto-sync').checked = false;
   $('#site-approve-manifest').checked = false;
   $('#site-git-url').value = '';

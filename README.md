@@ -5,7 +5,7 @@
 <h1 align="center">SHAM — Simple Hosting And More</h1>
 
 <p align="center"><strong>A self-hosted deployment, runtime, and operations control plane for websites and application servers.</strong></p>
-<p align="center"><strong>Current release: 1.4.0</strong> · <strong>AGPL-3.0-or-later</strong></p>
+<p align="center"><strong>Current release: 1.5.0</strong> · <strong>AGPL-3.0-or-later</strong></p>
 
 SHAM provides one browser dashboard for deploying applications, routing traffic, managing releases, operating runtimes, inspecting performance, and handling common infrastructure tasks on servers you control.
 
@@ -81,7 +81,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Open `http://127.0.0.1:8080` (or port `8080` on the server running SHAM). The first account becomes the administrator.
+Open `http://127.0.0.1:8080` (or port `8080` on the server running SHAM). The first account becomes the administrator; creating it requires the one-time setup token that SHAM prints in its log (`docker compose logs sham`) and stores in `sham-data/.setup-token`.
 
 The default stack persists `/data` to `./sham-data` and publishes the dashboard/API on `8080`, shared HTTP/HTTPS edge listeners on `80`/`443`, and host mappings for the per-site listener range `4100-4199`.
 

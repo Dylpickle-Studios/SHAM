@@ -50,14 +50,31 @@ function totp(secret, timestamp = Date.now(), stepSeconds = 30) {
   return hotp(secret, Math.floor(timestamp / 1000 / stepSeconds));
 }
 
-function verifyTotp(secret, code, { timestamp = Date.now(), window = 1 } = {}) {
+// Returns the matched 30-second time step, or null. Steps at or before
+// `afterStep` are skipped so an accepted code cannot be replayed.
+function matchTotpStep(secret, code, { timestamp = Date.now(), window = 1, afterStep = -Infinity } = {}) {
   const supplied = String(code || '').replace(/\s/g, '');
-  if (!/^\d{6}$/.test(supplied)) return false;
-  for (let offset = -window; offset <= window; offset += 1) {
-    const expected = totp(secret, timestamp + offset * 30_000);
-    if (crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return true;
+  if (!/^\d{6}$/.test(supplied)) return null;
+  const current = Math.floor(timestamp / 1000 / 30);
+  for (let step = current - window; step <= current + window; step += 1) {
+    if (step <= afterStep) continue;
+    if (crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(hotp(secret, step)))) return step;
   }
-  return false;
+  return null;
+}
+
+function verifyTotp(secret, code, options = {}) {
+  return matchTotpStep(secret, code, options) !== null;
+}
+
+// Accepts a TOTP code for an enrolled user at most once per time step.
+function consumeTotp(db, user, code, options = {}) {
+  const secret = userTotpSecret(user);
+  if (!secret) return false;
+  const lastStep = Number(db.prepare('SELECT totp_last_step FROM users WHERE id = ?').get(user.id)?.totp_last_step || 0);
+  const step = matchTotpStep(secret, code, { ...options, afterStep: lastStep });
+  if (step === null) return false;
+  return db.prepare('UPDATE users SET totp_last_step = ? WHERE id = ? AND totp_last_step < ?').run(step, user.id, step).changes === 1;
 }
 
 function generateTotpSetup(username, issuer = 'SHAM') {
@@ -87,9 +104,9 @@ function consumeRecoveryCode(db, userId, supplied) {
   return true;
 }
 
-function enableTotp(db, userId, secret, recoveryCodes) {
-  db.prepare('UPDATE users SET totp_secret = ?, totp_enabled = 1, recovery_codes_json = ? WHERE id = ?')
-    .run(encrypt(secret), JSON.stringify(recoveryCodes.map(hashRecoveryCode)), userId);
+function enableTotp(db, userId, secret, recoveryCodes, lastStep = 0) {
+  db.prepare('UPDATE users SET totp_secret = ?, totp_enabled = 1, recovery_codes_json = ?, totp_last_step = ? WHERE id = ?')
+    .run(encrypt(secret), JSON.stringify(recoveryCodes.map(hashRecoveryCode)), Number(lastStep) || 0, userId);
 }
 
 function disableTotp(db, userId) {
@@ -105,7 +122,9 @@ module.exports = {
   base32Decode,
   hotp,
   totp,
+  matchTotpStep,
   verifyTotp,
+  consumeTotp,
   generateTotpSetup,
   generateRecoveryCodes,
   hashRecoveryCode,

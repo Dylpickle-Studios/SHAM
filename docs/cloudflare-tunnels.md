@@ -6,8 +6,19 @@ For an enabled SHAM-managed site or instance/shared Tunnel whose origin is the
 shared edge proxy, SHAM automatically preserves Cloudflare's visitor identity.
 `cloudflared` connects over loopback, and SHAM accepts `CF-Connecting-IP` and
 `CF-IPCountry` only on that enabled local tunnel path before forwarding the
-request to the site. Visitor IP storage still follows **Settings → Security →
-Visitor privacy** (`none`, `mask`, or `hash`).
+request to the site. On Linux, SHAM additionally verifies (through
+`/proc/net/tcp` and the connector's open file descriptors) that the loopback
+connection belongs to a `cloudflared` process SHAM itself supervises; other
+local processes sending those headers are treated as ordinary loopback peers.
+Visitor IP storage still follows **Settings → Security → Visitor privacy**
+(`none`, `mask`, or `hash`).
+
+Whenever SHAM forwards a request (shared edge, site listener, reverse-proxy
+site, private listener), it rewrites `CF-Connecting-IP`/`CF-IPCountry` to the
+identity SHAM itself trusted, or removes the `CF-*` visitor headers
+(`CF-Connecting-IP`, `CF-IPCountry`, `CF-Visitor`, `CF-Ray`, `True-Client-IP`,
+and similar) when it did not trust them. A reverse-proxy site pointed back at a
+SHAM listener therefore cannot launder forged visitor headers.
 
 Do not add broad private networks to `SHAM_TRUSTED_EDGE_PROXIES`. That setting
 is only for a separately operated proxy/connector with a fixed, trusted peer;
@@ -105,7 +116,7 @@ Cloudflare Tunnel routes may target only a site's primary public listener or the
 | **Token needs attention** | An authentication failure was detected; retries pause until the token is replaced or an administrator explicitly restarts it. |
 | **Stopped** | The connector is not currently running. |
 
-SHAM supervises enabled connectors, uses jittered bounded restart backoff, rechecks an unavailable executable, and starts `cloudflared` with `--no-autoupdate`. Upgrade `cloudflared` by upgrading the SHAM image/package rather than allowing the child process to self-update.
+SHAM supervises enabled connectors, uses jittered bounded restart backoff, rechecks an unavailable executable, and starts `cloudflared` with `--no-autoupdate` and `--metrics 127.0.0.1:0` (the metrics/readiness server only ever binds loopback on a random port). Upgrade `cloudflared` by upgrading the SHAM image/package rather than allowing the child process to self-update.
 
 ## Dedicated versus shared connectors
 

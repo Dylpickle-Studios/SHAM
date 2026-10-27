@@ -31,6 +31,8 @@ Use these views as shortcuts; detailed runtime and deployment logs remain availa
 
 Opening a site gives access to the relevant site tools, including runtime state, files, logs, deployment/release history, networking/security, and settings. Availability depends on the site type; for example, static sites do not expose process restart controls.
 
+Accounts with the `user` role manage static and reverse-proxy sites. The site form hides the Node.js, managed-process, container, and Compose runtimes and disables the command fields for them, because those settings choose code that SHAM executes. Changing files of a site whose runtime executes code, or of a site that still honours `sham.yaml` manifests, needs an administrator; a user can turn manifests off in the site settings for a static or proxy site and then edit its files.
+
 The command palette also indexes each site's workspace destinations such as Files, Logs, Settings, Restart, and Git Deploy where applicable.
 
 ## Performance
@@ -79,7 +81,7 @@ Scheduled jobs and runtime-log workflows.
 
 ### Instance
 
-Git provider connections, backups, observability/export settings, and runtime integrations that apply to the SHAM instance.
+Git provider connections, backups, observability/export settings, and runtime integrations that apply to the SHAM instance. Staging an uploaded SHAM update asks for your password, like staging a backup restore.
 
 ### Administration
 

@@ -15,6 +15,8 @@ const { promisify } = require('node:util');
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(__dirname, '..', '..');
 const FIXTURES = path.join(__dirname, '..', 'fixtures', 'integration');
+// First-run registration requires the setup token; tests supply a fixed one.
+const SETUP_TOKEN = 'integration-setup-token-0123456789';
 
 async function freePort() {
   const server = net.createServer();
@@ -104,6 +106,7 @@ class ShamHarness {
         SHAM_EDGE_HTTP_PORT: String(this.edgePort),
         SHAM_EDGE_HTTPS_PORT: '0',
         SHAM_JWT_SECRET: 'integration-only-secret-at-least-thirty-two-characters',
+        SHAM_SETUP_TOKEN: SETUP_TOKEN,
         SHAM_PUBLIC_ORIGIN: this.baseUrl
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -168,7 +171,7 @@ class ShamHarness {
   async registerAdmin() {
     const setup = await this.request('/api/bootstrap');
     assert.equal(setup.needsSetup, true);
-    await this.request('/api/auth/register', { method: 'POST', body: { username: 'integration-admin', password: 'integration-password-123!' } });
+    await this.request('/api/auth/register', { method: 'POST', body: { username: 'integration-admin', password: 'integration-password-123!', setupToken: SETUP_TOKEN } });
   }
 
   async loginAdmin() {
@@ -354,4 +357,4 @@ class ShamHarness {
   }
 }
 
-module.exports = { ShamHarness, waitFor, freePort, ROOT, FIXTURES, run };
+module.exports = { SETUP_TOKEN, ShamHarness, waitFor, freePort, ROOT, FIXTURES, run };

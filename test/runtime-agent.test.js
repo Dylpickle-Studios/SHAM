@@ -23,7 +23,7 @@ function waitFor(predicate, timeoutMs = 5000) {
   });
 }
 
-async function startAgent() {
+async function startAgent(extraEnv = {}) {
   // Some archive/check-out paths discard executable bits. The runtime agent
   // intentionally executes its configured Docker binary, so make the test
   // fixture's contract explicit instead of relying on checkout metadata.
@@ -40,7 +40,8 @@ async function startAgent() {
       SHAM_RUNTIME_AGENT_SOCKET: socketPath,
       TMPDIR: stateDir,
       TMP: stateDir,
-      TEMP: stateDir
+      TEMP: stateDir,
+      ...extraEnv
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -160,6 +161,8 @@ test('runtime agent: input validation blocks dangerous or malformed operation ta
     ['malicious image reference', '/v1/containers/run', { name: 'sham-site-1-a', image: 'node:22; curl evil.example', siteId: 1 }],
     ['image removal outside the SHAM-managed namespace', '/v1/images/remove', { tag: 'ubuntu:latest' }],
     ['unknown/unmanaged network name', '/v1/networks/ensure', { name: 'host', internal: false }],
+    ['container run on the host network', '/v1/containers/run', { name: 'sham-site-1-a', image: 'node:22', siteId: 1, network: 'host' }],
+    ['container run on an unmanaged network', '/v1/containers/run', { name: 'sham-site-1-a', image: 'node:22', siteId: 1, network: 'bridge' }],
     ['sidecar name outside the Anubis namespace', '/v1/containers/sidecar-run', { name: 'sham-site-1-a', networkMode: 'host', policyFile: agent.dataDir, port: 8080, targetPort: 80 }]
   ];
 
@@ -330,4 +333,101 @@ test('runtime agent: named data volumes cannot attach unmanaged or host-bound vo
   fs.writeFileSync(statePath, JSON.stringify(state));
   const safe = await rawRequest(agent.socketPath, { path: '/v1/containers/run', token: agent.token, body: { ...body, namedVolume: 'sham-site-57-data' } });
   assert.equal(safe.statusCode, 200, safe.text);
+});
+
+test('runtime agent: compose runs the validated, hardened model from agent-private storage', async (t) => {
+  const agent = await startAgent();
+  t.after(() => agent.stop());
+  const statePath = path.join(agent.stateDir, 'sham-fake-docker-state.json');
+  const root = path.join(agent.dataDir, 'sites', 'compose-site');
+  fs.mkdirSync(path.join(root, 'app'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'app', 'Dockerfile'), 'FROM busybox\n');
+  fs.writeFileSync(path.join(root, 'secret.txt'), 'pa$$word\n');
+  const realRoot = fs.realpathSync(root);
+  const model = {
+    services: {
+      web: { image: 'ghcr.io/dylpickle-studios/sham:latest', build: { context: path.join(realRoot, 'app'), dockerfile: 'Dockerfile' }, secrets: [{ source: 'pw', target: '/run/secrets/pw' }] },
+      db: { image: 'postgres:16.14', cap_drop: ['NET_RAW'] }
+    },
+    secrets: { pw: { file: path.join(realRoot, 'secret.txt') } }
+  };
+  const file = path.join(root, 'compose.json');
+  fs.writeFileSync(file, JSON.stringify(model));
+  const body = { project: 'sham-60-run-a', files: [file], cwd: root, env: {}, service: 'web', containerPort: 3000 };
+  const up = await rawRequest(agent.socketPath, { path: '/v1/compose/up', token: agent.token, body });
+  assert.equal(up.statusCode, 200, up.text);
+  let calls = JSON.parse(fs.readFileSync(statePath, 'utf8')).composeCalls;
+  assert.deepEqual(calls.map((call) => call.sub), ['config', 'config', 'up']);
+  assert.ok(calls[1].args.includes('--no-interpolate'));
+  const started = calls[2];
+  assert.equal(started.project, 'sham-60-run-a');
+  assert.equal(started.projectDirectory, realRoot);
+  assert.equal(started.files.length, 1);
+  assert.ok(started.files[0].startsWith(path.join(fs.realpathSync(agent.stateDir), 'sham-agent-compose-')), started.files[0]);
+  assert.equal(fs.statSync(started.files[0]).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.dirname(started.files[0])).mode & 0o777, 0o700);
+  for (const service of Object.values(started.model.services)) {
+    assert.deepEqual(service.cap_drop, ['ALL']);
+    assert.deepEqual(service.security_opt, ['no-new-privileges:true']);
+  }
+  assert.ok(!started.model.services.db.cap_add.includes('NET_RAW'));
+  assert.match(started.model.services.web.image, /^sham-60-run-[a-z0-9-]+-web$/, 'a build cannot retag a host image');
+  assert.equal(started.model.configs['sham-secret-pw'].content, 'pa$$$$word\n');
+  assert.equal(started.model.secrets, undefined);
+
+  // Changing the project after validation must not change what Compose runs.
+  fs.writeFileSync(file, JSON.stringify({ services: { web: { image: 'busybox', privileged: true } } }));
+  const ps = await rawRequest(agent.socketPath, { path: '/v1/compose/ps', token: agent.token, body: { project: body.project, files: [file], cwd: root, env: {}, service: 'web' } });
+  assert.equal(ps.statusCode, 200, ps.text);
+  assert.equal(ps.json.containerId, 'cid-compose');
+  const down = await rawRequest(agent.socketPath, { path: '/v1/compose/down', token: agent.token, body: { project: body.project, files: [file], cwd: root, env: {} } });
+  assert.equal(down.statusCode, 200, down.text);
+  calls = JSON.parse(fs.readFileSync(statePath, 'utf8')).composeCalls;
+  assert.deepEqual(calls.map((call) => call.sub), ['config', 'config', 'up', 'ps', 'down']);
+  assert.ok(calls.slice(3).every((call) => call.files[0] === started.files[0]));
+  assert.equal(fs.existsSync(path.dirname(started.files[0])), false, 'the private model is removed on teardown');
+
+  // Without a model from this agent process, ps/exec revalidate the files.
+  const rejected = await rawRequest(agent.socketPath, { path: '/v1/compose/ps', token: agent.token, body: { project: 'sham-60-run-b', files: [file], cwd: root, env: {}, service: 'web' } });
+  assert.equal(rejected.statusCode, 400, rejected.text);
+  assert.match(rejected.json.error.message, /privileged/);
+});
+
+test('runtime agent: compose rejects symlinked project paths and external sources', async (t) => {
+  const agent = await startAgent();
+  t.after(() => agent.stop());
+  const root = path.join(agent.dataDir, 'sites', 'escape');
+  const other = path.join(agent.dataDir, 'sites', 'other');
+  fs.mkdirSync(root, { recursive: true });
+  fs.mkdirSync(other, { recursive: true });
+  fs.writeFileSync(path.join(other, '.env'), 'SECRET=other-site\n');
+  fs.symlinkSync(other, path.join(root, 'context'));
+  const file = path.join(root, 'compose.json');
+  const request = (model) => {
+    fs.writeFileSync(file, typeof model === 'string' ? model : JSON.stringify(model));
+    return rawRequest(agent.socketPath, { path: '/v1/compose/config', token: agent.token, body: { files: [file], cwd: root, env: {}, service: 'web', containerPort: 3000 } });
+  };
+  for (const [model, message] of [
+    [{ services: { web: { image: 'x', build: { context: path.join(root, 'context') } } } }, /build context must stay inside the site project/],
+    [{ services: { web: { image: 'x', env_file: [{ path: path.join(root, 'context', '.env'), required: true }] } } }, /env_file must stay inside the site project/],
+    ['{"services":{"web":{"extends":{"service":"base","file":"../other/compose.yaml"}}}}', /cannot extend services from other files/]
+  ]) {
+    const response = await request(model);
+    assert.equal(response.statusCode, 400, response.text);
+    assert.match(response.json.error.message, message);
+  }
+});
+
+test('runtime agent: network subnets are reported only for configured runtime networks', async (t) => {
+  const agent = await startAgent({ SHAM_DOCKER_INTERNAL_NETWORK: 'sham-test-internal', SHAM_DOCKER_EGRESS_NETWORK: 'sham-test-egress' });
+  t.after(() => agent.stop());
+  fs.writeFileSync(path.join(agent.stateDir, 'sham-fake-docker-state.json'), JSON.stringify({ containers: {}, networks: {
+    'sham-test-internal': { IPAM: { Config: [{ Subnet: '172.30.0.0/16', Gateway: '172.30.0.1' }, { Subnet: 'fd00:30::/64' }] } },
+    'unrelated-network': { IPAM: { Config: [{ Subnet: '10.99.0.0/16' }] } }
+  } }));
+  const response = await rawRequest(agent.socketPath, { path: '/v1/networks/subnets', token: agent.token, body: {} });
+  assert.equal(response.statusCode, 200, response.text);
+  assert.deepEqual(response.json, { networks: [{ name: 'sham-test-internal', subnets: ['172.30.0.0/16', 'fd00:30::/64'], gateways: ['172.30.0.1'] }] });
+  const unexpected = await rawRequest(agent.socketPath, { path: '/v1/networks/subnets', token: agent.token, body: { name: 'unrelated-network' } });
+  assert.equal(unexpected.statusCode, 400);
 });

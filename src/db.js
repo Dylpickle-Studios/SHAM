@@ -188,6 +188,7 @@ ensureColumn('users', 'totp_enabled', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('users', 'recovery_codes_json', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('users', 'password_configured', 'INTEGER NOT NULL DEFAULT 1');
 ensureColumn('users', 'session_version', 'INTEGER NOT NULL DEFAULT 1');
+ensureColumn('users', 'totp_last_step', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('plugins', 'permissions_json', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('plugins', 'signature_status', "TEXT NOT NULL DEFAULT 'unsigned'");
 ensureColumn('plugins', 'isolation', "TEXT NOT NULL DEFAULT 'in-process'");

@@ -59,6 +59,16 @@ Declarative plugins can expose permitted data/actions/UI without arbitrary serve
 
 SQL/data declarations are validated and deliberately restricted from sensitive internal tables/operations. Do not design plugins around bypassing those boundaries.
 
+## Plugin SQL policy
+
+The same policy applies to declarative `queries` and to `data.all`/`data.get`/`data.run` in JavaScript plugins. SHAM compiles each statement and inspects the tables SQLite will actually open, so the rules hold however the SQL is written:
+
+- **Readable core tables:** `sites` (columns `id`, `name`, `slug`, `directory_name`, `port`, `bind_host`, `runtime_type`, `enabled`, `domain`, `domain_only`, `preview_domain`, `ssl_enabled`, `cloudflare_enabled`, `edge_enabled`, `release_mode`, `maintenance_enabled`, `pinned`, `runtime_isolation`, `entry_file`, `spa_fallback`, `cache_seconds`, `compression`, `health_check_path`, `git_branch`, `created_at`, `updated_at`), `site_stats`, `site_daily_stats`, `site_performance_samples`, and `performance_samples`. `SELECT *` from `sites` is rejected; name the columns.
+- **Plugin-owned tables:** tables named `plugin_<id>_<name>`, where `<id>` is the plugin ID with `-` replaced by `_` (plugin `site-notes` owns `plugin_site_notes_*`). A plugin can read, write, `CREATE TABLE`, `CREATE [UNIQUE] INDEX`, `DROP TABLE`/`DROP INDEX`, and `ALTER TABLE` only for its own tables. Writes and schema changes need `data:write`; a statement that modifies data is rejected under `data:read` alone.
+- **Rejected:** writes to any core table, `ATTACH`/`DETACH`, `PRAGMA` and `pragma_*` functions, `VACUUM`, `BEGIN`/`COMMIT`/savepoints, triggers, views, virtual tables and table-valued functions such as `json_each`, `TEMP` objects, SQLite internal tables, and `load_extension`/`readfile`/`writefile`/`fts3_tokenizer`.
+
+Create plugin tables from `activate()` or an admin action, for example `await data.run('CREATE TABLE IF NOT EXISTS plugin_site_notes_notes (site_id INTEGER, body TEXT)')`. Declarative plugins can read their own tables but cannot create them.
+
 ## Browser client
 
 A plugin can ship `client.js` and register through the SHAM browser plugin API.
@@ -88,6 +98,15 @@ SHAM applies:
 Each enabled plugin keeps its own worker isolate running. Its heap is capped by `SHAM_PLUGIN_MEMORY_MB` (default 64 MB); a plugin that exceeds the cap is stopped and marked failed instead of growing the SHAM process without bound. Raise the limit only for plugins that genuinely need more memory.
 
 Worker threads share the same OS process authority. They are a fault-containment mechanism, not a hostile-code sandbox.
+
+Worker-isolated plugins run in a V8 context that contains no Node.js or SHAM host objects. Inside it, plugin code can use:
+
+- The `activate(context)` API (`id`, `manifest`, `permissions`, `data`, `settings`, `runtime`, `log`) and the request passed to each action (`body`, `query`, `user`, `method`, `data`, `settings`). Host operations return promises.
+- `console`, `setTimeout`/`setInterval`/`clearTimeout`/`clearInterval` (which return numeric IDs), and `queueMicrotask`.
+- `fetch(url, { method, headers, body })` with the `network:outbound` permission. It returns `{ ok, status, statusText, url, headers.get(), text(), json() }`; bodies are strings and responses are limited to 8 MB.
+- `require('crypto')` with `randomUUID()`, `randomBytes(n)`, `createHash(algorithm)` and `createHmac(algorithm, key)` (`update()` takes strings or `Uint8Array`; `digest()` takes `'hex'`, `'base64'`, `'base64url'`, or nothing for a `Uint8Array`).
+
+Values crossing the boundary (arguments, action results, settings) are converted to JSON, so return plain data. `Buffer`, `URL`, `TextEncoder`, and requiring any other module are not available. Plugins that need them must use in-process isolation, which runs with the full authority of SHAM and should be reserved for code you would run as part of SHAM itself.
 
 ## Permissions
 

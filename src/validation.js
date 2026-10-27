@@ -277,6 +277,40 @@ function validateOptionalHostname(value, label) {
 }
 
 
+// Link-local ranges host cloud metadata services (169.254.169.254,
+// fd00:ec2::254) and must never be proxy targets. Hostnames are not resolved
+// here; only literal addresses (in any form the URL parser normalizes) are.
+const PROXY_FORBIDDEN_TARGETS = new net.BlockList();
+PROXY_FORBIDDEN_TARGETS.addSubnet('169.254.0.0', 16, 'ipv4');
+PROXY_FORBIDDEN_TARGETS.addSubnet('fe80::', 10, 'ipv6');
+PROXY_FORBIDDEN_TARGETS.addAddress('fd00:ec2::254', 'ipv6');
+
+/** @param {string} address */
+function embeddedIpv4(address) {
+  // IPv4-mapped (::ffff:a.b.c.d), IPv4-compatible (::a.b.c.d), and NAT64 (64:ff9b::/96) forms.
+  const match = /^(?:::ffff:|::|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(address) || null;
+  if (match) return [Number.parseInt(match[1], 16) >> 8, Number.parseInt(match[1], 16) & 255, Number.parseInt(match[2], 16) >> 8, Number.parseInt(match[2], 16) & 255].join('.');
+  const dotted = /^(?:::ffff:|::|64:ff9b::)(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(address);
+  return dotted ? dotted[1] : '';
+}
+
+/** @param {URL} target */
+function assertSafeProxyTarget(target) {
+  const host = target.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  const version = net.isIP(host);
+  const ipv4 = version === 4 ? host : version === 6 ? embeddedIpv4(host) : '';
+  if ((ipv4 && PROXY_FORBIDDEN_TARGETS.check(ipv4, 'ipv4')) || (version === 6 && PROXY_FORBIDDEN_TARGETS.check(host, 'ipv6'))) {
+    throw new Error('Reverse proxy target cannot be a link-local or cloud metadata address.');
+  }
+  const ownAddresses = new Set(Object.values(require('node:os').networkInterfaces()).flat().map((entry) => entry?.address.toLowerCase()));
+  const local = host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host === '::' || host === '0.0.0.0'
+    || /^127\./.test(ipv4 || host) || ipv4 === '0.0.0.0' || ownAddresses.has(ipv4 || host);
+  const port = Number(target.port || (target.protocol === 'https:' ? 443 : 80));
+  // Read SHAM_PORT directly (same default as config.DASHBOARD_PORT): importing
+  // config here would create data directories/secrets as a side effect.
+  if (local && port === (Number.parseInt(process.env.SHAM_PORT || '', 10) || 8080)) throw new Error('Reverse proxy target cannot be the SHAM dashboard.');
+}
+
 function validateProxyTarget(value, runtimeType) {
   const raw = String(value || '').trim();
   if (runtimeType !== 'proxy') return raw.slice(0, 2048);
@@ -286,6 +320,7 @@ function validateProxyTarget(value, runtimeType) {
   catch { throw new Error('Reverse proxy target must be a valid HTTP or HTTPS URL.'); }
   if (!['http:', 'https:'].includes(target.protocol)) throw new Error('Reverse proxy target must use HTTP or HTTPS.');
   if (target.username || target.password) throw new Error('Reverse proxy target must not embed credentials.');
+  assertSafeProxyTarget(target);
   return target.href.slice(0, 2048);
 }
 
@@ -533,6 +568,7 @@ module.exports = {
   validateCacheRules,
   validateContainerImage,
   validateProxyTarget,
+  assertSafeProxyTarget,
   validateProxyHostHeader,
   validateBuildCommand,
   validateBuildOutput,

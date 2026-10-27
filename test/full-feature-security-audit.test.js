@@ -167,3 +167,16 @@ test('every literal client API call maps to a server route', () => {
   assert.ok(new Set(clients).size >= 65, 'feature endpoint inventory unexpectedly shrank');
   for (const client of clients) assert.ok(routes.some((route) => pathMatches(client, route)), `client endpoint has no server route: ${client}`);
 });
+
+test('deploy webhook signatures cover the raw body on both the legacy and /api/v1 routes', () => {
+  const server = read('src/server.js');
+  // The JSON parser captures rawBody before the /api/v1 alias rewrites req.url,
+  // so the capture must recognize both spellings or v1 HMACs cover an empty body.
+  assert.ok(server.indexOf('verify: (req, _res, buffer)') < server.indexOf('app.use(apiV1Compatibility)'));
+  const pattern = server.match(/verify: \(req, _res, buffer\) => \{ if \((\/.+?\/)\.test\(req\.path\)\) req\.rawBody/)?.[1];
+  assert.ok(pattern, 'rawBody capture must use an explicit route pattern');
+  const capture = new RegExp(pattern.slice(1, -1));
+  assert.ok(capture.test('/api/hooks/deploy/7'));
+  assert.ok(capture.test('/api/v1/hooks/deploy/7'));
+  assert.ok(!capture.test('/api/sites/7'));
+});

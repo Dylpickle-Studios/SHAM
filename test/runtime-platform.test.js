@@ -11,7 +11,7 @@ const { validateSiteInput } = require('../src/validation');
 const { safeArchiveEntry } = require('../src/backup-restore');
 const { lineLogger, shellCommand, waitForReadiness } = require('../src/runtime-engine');
 const { CoreSiteManager } = require('../src/sites/core');
-const { requestIdentity } = require('../src/sites/shared');
+const { requestIdentity, setLocalTunnelPeerVerifier } = require('../src/sites/shared');
 const { EdgeProxy } = require('../src/edge-proxy');
 const { verifyWithJwk } = require('../src/oidc');
 const { siteRoot, safeReleaseDirectory } = require('../src/site-paths');
@@ -95,7 +95,9 @@ test('runtime output is grouped into bounded workspace log events without mixing
   assert.deepEqual(recorded[1], [7, 'error', 'node: an error line', null]);
 });
 
-test('an enabled local Cloudflare Tunnel preserves visitor identity without trusting remote spoofed headers', () => {
+test('an enabled local Cloudflare Tunnel preserves visitor identity without trusting remote spoofed headers', (t) => {
+  setLocalTunnelPeerVerifier(() => true);
+  t.after(() => setLocalTunnelPeerVerifier(null));
   const localTunnelRequest = {
     headers: { 'cf-connecting-ip': '203.0.113.21', 'cf-ipcountry': 'NL', 'user-agent': 'Mozilla/5.0' },
     socket: { remoteAddress: '127.0.0.1' }

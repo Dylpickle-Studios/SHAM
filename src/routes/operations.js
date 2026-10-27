@@ -601,11 +601,13 @@ function authenticateDeployWebhook(req, res, next) {
     res.type('application/x-ndjson').send(rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
   });
 
-  app.post('/api/admin/update', requireAuth, requireAdmin, multipart(updateUpload.single('archive')), async (req, res) => {
+  app.post('/api/admin/update', requireAuth, requireAdmin, stepUpLimiter, multipart(updateUpload.single('archive')), async (req, res) => {
     try {
+      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+      if (!(await verifyPassword(String(req.body?.password || ''), user.password_salt, user.password_hash))) return res.status(401).json({ error: 'Password confirmation failed.' });
       if (!req.file?.path) throw new Error('Choose a SHAM update ZIP.');
-      const pending = await updateManager.stage(req.file.path, req.file.originalname, { allowUnsigned: bool(req.body.allowUnsigned, false) });
-      recordAudit(req.user.id, 'update.stage', { version: pending.version, archiveName: pending.archiveName });
+      const pending = await updateManager.stage(req.file.path, req.file.originalname, { allowUnsigned: bool(req.body.allowUnsigned, false), allowDowngrade: bool(req.body.allowDowngrade, false) });
+      recordAudit(req.user.id, 'update.stage', { version: pending.version, archiveName: pending.archiveName, downgrade: Boolean(pending.downgrade) });
       res.status(201).json({ pending, message: 'Update staged. Restart SHAM to apply it with automatic managed-file rollback.' });
     } catch (error) { res.status(400).json({ error: error.message }); }
   });

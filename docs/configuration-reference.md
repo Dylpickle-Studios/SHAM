@@ -79,6 +79,7 @@ The multipart site form also uses an internal bounded field-count limit with eno
 | Variable | Default | Purpose |
 |---|---|---|
 | `SHAM_JWT_SECRET` | generated if absent | JWT/session signing secret. Supply at least 32 random characters in production. Generated values belong under `SHAM_DATA_PATH`, never in source. |
+| `SHAM_SETUP_TOKEN` | generated if absent | One-time token required by `POST /api/auth/register` while no account exists. When unset (or shorter than 16 characters), SHAM generates one, logs it at startup, and stores it in `SHAM_DATA_PATH/.setup-token` (mode `0600`); the file is deleted after the first administrator is created. |
 | `SHAM_MASTER_KEY` | generated keyring if absent | Optional external 32-byte key (hex/base64url accepted by the implementation) used to protect saved integration/plugin/TOTP secrets. |
 | `NODE_ENV` | `development` | Runtime mode. Production affects security behavior such as cookies. |
 

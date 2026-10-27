@@ -6,6 +6,7 @@ const { RUNTIME_AGENT_SOCKET_PATH, RUNTIME_AGENT_TOKEN_PATH } = require('../src/
 const { loadOrCreateToken } = require('./auth');
 const { createServer } = require('./server');
 const { log } = require('./logger');
+const { removeStaleComposeProjects } = require('./compose');
 
 function removeStaleSocket(socketPath) {
   try { fs.unlinkSync(socketPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -17,6 +18,7 @@ function main() {
 
   fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 });
   removeStaleSocket(socketPath);
+  removeStaleComposeProjects();
 
   const server = createServer({ token });
   server.listen(socketPath, () => {
